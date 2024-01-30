@@ -1,3 +1,10 @@
+use std::{
+    hash::Hasher,
+    io::{self, Read, Write},
+};
+
+use thiserror::Error;
+
 // this is the largest prime number < 2^64. As we will probably never encounter
 // a Bloom filter with a number of bits > m (if yes sorry to you people from,
 // the future, I envy your available RAM though) we can use the pseudorandom
@@ -19,9 +26,11 @@ pub struct Fingerprint {
 }
 
 impl Fingerprint {
-    pub fn with_size<S: AsRef<[u8]>>(data: S, modulo: u64, size: u64) -> Self {
+    pub fn with_size<H: std::hash::Hasher + Default>(data: &[u8], modulo: u64, size: u64) -> Self {
+        let mut hasher: H = H::default();
+        hasher.write(data.as_ref());
         Self {
-            hn: Fnv1Hasher::digest(data),
+            hn: hasher.finish(),
             m: modulo,
             i: 0,
             size,
@@ -43,6 +52,21 @@ impl Iterator for Fingerprint {
     }
 }
 
+fn read_le_u64<R: Read>(r: &mut R) -> Result<u64, io::Error> {
+    let mut bytes = [0u8; 8];
+    r.read_exact(bytes.as_mut_slice())?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    IoError(#[from] io::Error),
+    #[error("invalid version {0}")]
+    InvalidVersion(u64),
+}
+
+#[allow(non_snake_case)]
 #[derive(Debug, Default)]
 pub struct BloomFilter {
     v: Vec<u64>,
@@ -58,7 +82,7 @@ pub struct BloomFilter {
 impl BloomFilter {
     #[inline(always)]
     fn fingerprint<S: AsRef<[u8]>>(&self, value: S) -> Fingerprint {
-        Fingerprint::with_size(value, self.m, self.k)
+        Fingerprint::with_size::<Fnv1Hasher>(value.as_ref(), self.m, self.k)
     }
 
     pub fn with_capacity(cap: u64, proba: f64) -> Self {
@@ -68,18 +92,65 @@ impl BloomFilter {
         ));
 
         // size in bytes
-        let byte_size = f64::ceil(bit_size / 64.0) as usize;
+        let u64_size = f64::ceil(bit_size / 64.0) as usize;
 
         Self {
-            v: vec![0; byte_size],
+            v: vec![0; u64_size],
             n: cap,
             p: proba,
             k: f64::ceil(f64::log2(2.0) * bit_size / (cap as f64)) as u64,
             m: bit_size as u64,
             N: 0,
-            M: byte_size as u64,
+            M: u64_size as u64,
             data: vec![],
         }
+    }
+
+    pub fn from_reader<R: Read>(mut r: R) -> Result<Self, Error> {
+        let flags = read_le_u64(&mut r)?;
+        let mut b = Self::default();
+
+        let version = flags & 0xff;
+
+        if version != 1 {
+            return Err(Error::InvalidVersion(version));
+        }
+
+        b.n = read_le_u64(&mut r)?;
+        b.p = (read_le_u64(&mut r)?) as f64;
+        b.k = read_le_u64(&mut r)?;
+        b.m = read_le_u64(&mut r)?;
+        b.N = read_le_u64(&mut r)?;
+
+        // initializing bitset
+        b.M = f64::ceil((b.m as f64) / 64.0) as u64;
+        b.v = vec![0; b.M as usize];
+
+        // reading the bloom filter
+        for i in b.v.iter_mut() {
+            *i = read_le_u64(&mut r)?;
+        }
+
+        // reading data
+        b.data = std::io::read_to_string(r)?.as_bytes().to_vec();
+
+        Ok(b)
+    }
+
+    pub fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
+        w.write_all(&1u64.to_le_bytes())?;
+        w.write_all(&self.n.to_le_bytes())?;
+        w.write_all(&self.p.to_le_bytes())?;
+        w.write_all(&self.k.to_le_bytes())?;
+        w.write_all(&self.m.to_le_bytes())?;
+        w.write_all(&self.N.to_le_bytes())?;
+
+        for i in self.v.iter() {
+            w.write_all(&i.to_le_bytes())?;
+        }
+
+        w.write_all(&self.data)?;
+        Ok(())
     }
 
     #[inline(always)]
@@ -99,6 +170,12 @@ impl BloomFilter {
         let old = self.v[block as usize] & (1u64 << bit) == (1u64 << bit);
         self.v[block as usize] |= 1u64 << bit;
         old
+    }
+
+    pub fn bits(&self) -> Vec<bool> {
+        (0..self.m)
+            .map(|i| self.get_nth_bit(i))
+            .collect::<Vec<bool>>()
     }
 
     #[inline(always)]
@@ -139,62 +216,68 @@ impl BloomFilter {
     pub fn count_estimate(&self) -> u64 {
         self.N
     }
+
+    pub fn size_in_bytes(&self) -> usize {
+        self.M as usize * core::mem::size_of::<u64>()
+    }
 }
 
 const FNV_OFFSET: u64 = 14695981039346656037;
 const FNV_PRIME: u64 = 1099511628211;
 
-pub trait Hasher {
-    type Output;
-    fn new() -> Self;
-
-    fn update<S: AsRef<[u8]>>(&mut self, s: S);
-    fn sum(&self) -> Self::Output;
-
-    #[inline(always)]
-    fn digest<S: AsRef<[u8]>>(s: S) -> Self::Output
-    where
-        Self: Sized,
-    {
-        let mut h = Self::new();
-        h.update(s);
-        h.sum()
-    }
-}
-
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Fnv1Hasher {
     sum: u64,
 }
 
-impl Hasher for Fnv1Hasher {
-    type Output = u64;
-    fn new() -> Self {
+impl Default for Fnv1Hasher {
+    fn default() -> Self {
         Self { sum: FNV_OFFSET }
+    }
+}
+
+impl Hasher for Fnv1Hasher {
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.sum
     }
 
     #[inline(always)]
-    fn update<S: AsRef<[u8]>>(&mut self, s: S) {
-        s.as_ref().iter().for_each(|b| {
+    fn write(&mut self, bytes: &[u8]) {
+        bytes.iter().for_each(|b| {
             self.sum = self.sum.wrapping_mul(FNV_PRIME);
             self.sum ^= *b as u64;
         })
     }
+}
 
-    #[inline(always)]
-    fn sum(&self) -> u64 {
-        self.sum
+impl Fnv1Hasher {
+    // ToDo move this to a generic taking a Hasher as param
+    pub fn digest<S: AsRef<[u8]>>(s: S) -> u64 {
+        let mut h = Self::default();
+        h.write(s.as_ref());
+        h.finish()
     }
 }
 
+// bloom![cap, prob, {values...}]
+#[macro_export]
+macro_rules! bloom {
+        ($cap:literal, $proba:literal) => {
+            $crate::BloomFilter::with_capacity($cap, $proba)
+        };
+        ($cap:literal, $proba:literal, [$($values:literal),*]) => {
+            {
+                let mut b=bloom!($cap, $proba);
+                $(b.insert($values);)*
+                b
+            }
+        };
+    }
+
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{self, BufRead},
-        time::Duration,
-    };
-
-    use rand::Rng;
+    use std::io::{self};
 
     use super::*;
 
@@ -211,10 +294,10 @@ mod tests {
 
     #[test]
     fn test_fnv_update() {
-        let mut hasher = Fnv1Hasher::new();
-        hasher.update("Hello, ");
-        hasher.update("World!");
-        assert_eq!(hasher.sum(), 8889723880822884486)
+        let mut hasher = Fnv1Hasher::default();
+        hasher.write("Hello, ".as_bytes());
+        hasher.write("World!".as_bytes());
+        assert_eq!(hasher.finish(), 8889723880822884486)
     }
 
     #[test]
@@ -227,75 +310,34 @@ mod tests {
         assert!(!b.contains("unknown"));
     }
 
-    fn time_it<F: FnMut()>(mut f: F) -> Duration {
-        let start_time = std::time::Instant::now();
-        f();
-        let end_time = std::time::Instant::now();
-        end_time - start_time
+    #[test]
+    fn test_macro() {
+        let b = bloom!(1000, 0.0001, ["hello", "world"]);
+        assert!(b.contains("hello"));
+        assert!(b.contains("world"));
     }
 
     #[test]
-    fn benchmark_bloom() {
-        let mut rng = rand::thread_rng();
-        let data = include_bytes!("./data/all-hashes/42.txt");
-        let count = include_str!("./data/all-hashes/42.count")
-            .parse::<u64>()
-            .unwrap();
-        let collision_rate = 0.001;
-        let mut b = BloomFilter::with_capacity(count, 0.001);
-        let reader = io::BufReader::new(io::Cursor::new(data));
-        let lines = reader.lines().flatten().collect::<Vec<String>>();
+    fn test_serialization() {
+        let b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let mut cursor = io::Cursor::new(vec![]);
+        b.write(&mut cursor).unwrap();
+        cursor.set_position(0);
+        // deserializing the stuff out
+        let b = BloomFilter::from_reader(cursor).unwrap();
+        assert!(b.contains("deserialization"));
+        assert!(b.contains("test"));
+        assert!(!b.contains("hello"));
+        assert!(!b.contains("world"));
+    }
 
-        let insert_dur = time_it(|| lines.iter().for_each(|l| b.insert(l)));
-
-        let mb_size = data.len() as f64 / 1_048_576.0;
-
-        eprintln!("data: {} entries -> {:.1} MB", count, mb_size);
-
-        eprintln!("\nInsertion performance:");
-        eprintln!("\tinsert duration: {:?}", insert_dur);
-        eprintln!(
-            "\tinsertion speed: {:.1} entries/s -> {:.1} MB/s",
-            count as f64 / insert_dur.as_secs_f64(),
-            mb_size / insert_dur.as_secs_f64()
-        );
-
-        eprintln!("\nQuery performance:");
-        for mut_prob in (0..=100).step_by(10) {
-            let mut tmp = lines.clone();
-            let mutated_lines = tmp
-                .iter_mut()
-                .map(|e| {
-                    if rng.gen_range(0..=100) < mut_prob {
-                        unsafe { e.as_bytes_mut() }
-                            .iter_mut()
-                            .for_each(|b| *b ^= 42);
-                    }
-                    e.clone()
-                })
-                .collect::<Vec<String>>();
-
-            let query_dur = time_it(|| {
-                mutated_lines.iter().for_each(|l| {
-                    b.contains(l);
-                })
-            });
-
-            eprintln!("\t% of query not in filter: {}%", mut_prob);
-            eprintln!("\tquery duration: {:?}", query_dur);
-            eprintln!(
-                "\tquery speed: {:.1} entries/s -> {:.1} MB/s",
-                count as f64 / query_dur.as_secs_f64(),
-                mb_size / query_dur.as_secs_f64()
-            );
-            eprintln!();
-        }
-
-        eprintln!("\nCollision information:");
-        eprintln!("\texpected collision rate: {}", collision_rate);
-        eprintln!(
-            "\treal collision rate: {:.5}%",
-            1.0 - (b.count_estimate() as f64) / count as f64
-        );
+    #[test]
+    fn test_deserialization() {
+        // this test file has been generated with Go bloom cli
+        let data = include_bytes!("./data/test.bloom");
+        let b = BloomFilter::from_reader(io::BufReader::new(io::Cursor::new(data))).unwrap();
+        assert!(b.contains("hello"));
+        assert!(b.contains("world"));
+        assert!(!b.contains("hello world"));
     }
 }
