@@ -70,8 +70,8 @@ pub enum Error {
     IoError(#[from] io::Error),
     #[error("invalid version {0}")]
     InvalidVersion(u64),
-    #[error("union error")]
-    Union,
+    #[error("union error: {0}")]
+    Union(String),
 }
 
 #[allow(non_snake_case)]
@@ -261,10 +261,8 @@ impl BloomFilter {
     }
 
     fn update_count(&mut self) {
-        self.N = f64::ceil(
-            -(self.m as f64 * f64::ln(1.0 - (self.count_ones() as f64 / self.m as f64)))
-                / self.k as f64,
-        ) as u64;
+        self.N = (-(self.m as f64 * f64::ln(1.0 - (self.count_ones() as f64 / self.m as f64)))
+            / self.k as f64) as u64;
     }
 
     #[inline(always)]
@@ -290,7 +288,9 @@ impl BloomFilter {
 
     pub fn union(&mut self, other: &Self) -> Result<(), Error> {
         if !self.has_same_params(other) {
-            return Err(Error::Union);
+            return Err(Error::Union(
+                "cannot make union of bloom filters with different parameters".into(),
+            ));
         }
 
         for (i, e) in self.v.iter_mut().enumerate() {
@@ -421,5 +421,30 @@ mod tests {
         assert!(b.contains("hello"));
         assert!(b.contains("world"));
         assert!(!b.contains("hello world"));
+    }
+
+    #[test]
+    fn test_union() {
+        let mut b = bloom!(1000, 0.0001, ["hello", "world"]);
+        let o = bloom!(1000, 0.0001, ["union", "test"]);
+
+        b.union(&o).unwrap();
+
+        ["hello", "world", "union", "test"]
+            .into_iter()
+            .for_each(|v| {
+                assert!(b.contains(v));
+            });
+        
+        // estimate count should be exact for a small test like this
+        assert_eq!(b.count_estimate(), 4);
+    }
+
+    #[test]
+    fn test_union_failure() {
+        let mut b = bloom!(1000, 0.0001, ["hello", "world"]);
+        let o = bloom!(100, 0.0001, ["union", "test"]);
+
+        assert!(b.union(&o).is_err())
     }
 }
