@@ -26,6 +26,7 @@ pub struct Fingerprint {
 }
 
 impl Fingerprint {
+    #[inline(always)]
     pub fn with_size<H: std::hash::Hasher + Default>(data: &[u8], modulo: u64, size: u64) -> Self {
         let mut hasher: H = H::default();
         hasher.write(data.as_ref());
@@ -286,6 +287,8 @@ impl BloomFilter {
             && self.M == other.M
     }
 
+    /// makes the union of self with another bloom filter (having the same
+    /// parameters)
     pub fn union(&mut self, other: &Self) -> Result<(), Error> {
         if !self.has_same_params(other) {
             return Err(Error::Union(
