@@ -407,6 +407,7 @@ mod tests {
         cursor.set_position(0);
         // deserializing the stuff out
         let b = BloomFilter::from_reader(cursor).unwrap();
+        assert_eq!(b.proba(), 0.0001);
         assert!(b.contains("deserialization"));
         assert!(b.contains("test"));
         assert!(!b.contains("hello"));
@@ -418,6 +419,8 @@ mod tests {
         // this test file has been generated with Go bloom cli
         let data = include_bytes!("./data/test.bloom");
         let b = BloomFilter::from_reader(io::BufReader::new(io::Cursor::new(data))).unwrap();
+        // proba it's been serialzed with with Go implementation
+        assert_eq!(b.proba(), 0.01);
         assert!(b.contains("hello"));
         assert!(b.contains("world"));
         assert!(!b.contains("hello world"));
@@ -435,7 +438,7 @@ mod tests {
             .for_each(|v| {
                 assert!(b.contains(v));
             });
-        
+
         // estimate count should be exact for a small test like this
         assert_eq!(b.count_estimate(), 4);
     }
