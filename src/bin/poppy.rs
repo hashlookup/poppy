@@ -54,27 +54,31 @@ pub struct Args {
 
 #[derive(Debug, Parser)]
 enum Command {
+    /// Create a new bloom filter
     Create(Create),
+    /// Insert data into an existing bloom filter
     Insert(Insert),
+    /// Checks entries against an existing bloom filter
     Check(Check),
+    /// Show information about an existing bloom filter
     Show(Show),
 }
 
 #[derive(Debug, Parser)]
 struct Create {
-    /// capacity of the bloom filter
+    /// Capacity of the bloom filter
     #[clap(short, long, default_value = "10000")]
     capacity: u64,
-    /// false positive rate
+    /// False positive rate
     #[clap(short, long, default_value = "0.01")]
     probability: f64,
-    /// file to store the bloom filter
+    /// File to store the bloom filter
     file: String,
 }
 
 #[derive(Debug, Parser)]
 struct Insert {
-    /// show progress information
+    /// Show progress information
     #[clap(short, long)]
     progress: bool,
     /// The number of jobs to use to insert into the bloom filter. The original
@@ -82,29 +86,29 @@ struct Insert {
     /// of the whole process to be N times the size of the (uncompressed) bloom filter.
     #[clap(short, long, default_value = "2")]
     jobs: usize,
-    /// file containing the bloom filter to update
+    /// File containing the bloom filter to update
     file: String,
-    /// input files containing one entry per line
+    /// Input files containing one entry per line
     inputs: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
 struct Check {
-    /// numbers of parallel jobs to check bloom filter
+    /// Numbers of parallel jobs to check bloom filter
     #[clap(short, long, default_value = "2")]
     jobs: usize,
-    /// only show entries not in the bloom filter
+    /// Only show entries not in the bloom filter
     #[clap(long)]
     verify: bool,
-    /// file containing the bloom filter
+    /// File containing the bloom filter
     file: String,
-    /// input files containing one entry per line
+    /// Input files containing one entry per line
     inputs: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
 struct Show {
-    /// file containing the bloom filter
+    /// File containing the bloom filter
     file: String,
 }
 
