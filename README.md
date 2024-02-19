@@ -1,3 +1,6 @@
+
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/hashlookup/poppy/rust.yml?style=for-the-badge)
+
 # Building
 
 ## Regular building
