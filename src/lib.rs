@@ -1,6 +1,6 @@
 use std::{
     hash::Hasher,
-    io::{self, Read, Write},
+    io::{self, BufWriter, Read, Write},
 };
 
 use thiserror::Error;
@@ -58,24 +58,39 @@ fn read_le_u64<R: Read>(r: &mut R) -> Result<u64, io::Error> {
     Ok(u64::from_le_bytes(bytes))
 }
 
+fn read_le_f64<R: Read>(r: &mut R) -> Result<f64, io::Error> {
+    let mut bytes = [0u8; 8];
+    r.read_exact(bytes.as_mut_slice())?;
+    Ok(f64::from_le_bytes(bytes))
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
     IoError(#[from] io::Error),
     #[error("invalid version {0}")]
     InvalidVersion(u64),
+    #[error("union error")]
+    Union,
 }
 
 #[allow(non_snake_case)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct BloomFilter {
     v: Vec<u64>,
+    //desired maximum number of elements
     n: u64,
+    //desired false positive probability
     p: f64,
+    //number of hash functions
     k: u64,
+    //number of bits
     m: u64,
+    //number of elements in the filter
     pub N: u64,
+    //number of 64-bit integers (generated automatically)
     pub M: u64,
+    //arbitrary data that we can attach to the filter
     pub data: Vec<u8>,
 }
 
@@ -106,7 +121,29 @@ impl BloomFilter {
         }
     }
 
-    pub fn from_reader<R: Read>(mut r: R) -> Result<Self, Error> {
+    #[inline(always)]
+    pub fn cap(&self) -> usize {
+        self.n as usize
+    }
+
+    #[inline(always)]
+    pub fn proba(&self) -> f64 {
+        self.p
+    }
+
+    #[inline(always)]
+    pub fn n_hash_fn(&self) -> u64 {
+        self.k
+    }
+
+    #[inline(always)]
+    pub fn n_bits(&self) -> u64 {
+        self.m
+    }
+
+    pub fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
+        let mut r = io::BufReader::new(r);
+
         let flags = read_le_u64(&mut r)?;
         let mut b = Self::default();
 
@@ -117,7 +154,7 @@ impl BloomFilter {
         }
 
         b.n = read_le_u64(&mut r)?;
-        b.p = (read_le_u64(&mut r)?) as f64;
+        b.p = read_le_f64(&mut r)?;
         b.k = read_le_u64(&mut r)?;
         b.m = read_le_u64(&mut r)?;
         b.N = read_le_u64(&mut r)?;
@@ -138,6 +175,8 @@ impl BloomFilter {
     }
 
     pub fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
+        let mut w = BufWriter::new(w);
+
         w.write_all(&1u64.to_le_bytes())?;
         w.write_all(&self.n.to_le_bytes())?;
         w.write_all(&self.p.to_le_bytes())?;
@@ -209,6 +248,25 @@ impl BloomFilter {
         true
     }
 
+    /// counts all the set bits in the bloom filter
+    #[inline(always)]
+    pub fn count_ones(&self) -> usize {
+        self.v.iter().map(|u| u.count_ones() as usize).sum()
+    }
+
+    /// counts all the unset bits in the bloom filter
+    #[inline(always)]
+    pub fn count_zeros(&self) -> usize {
+        self.v.iter().map(|u| u.count_zeros() as usize).sum()
+    }
+
+    fn update_count(&mut self) {
+        self.N = f64::ceil(
+            -(self.m as f64 * f64::ln(1.0 - (self.count_ones() as f64 / self.m as f64)))
+                / self.k as f64,
+        ) as u64;
+    }
+
     #[inline(always)]
     /// returns an estimate of the number of element in the filter
     /// the exact number of element cannot be known as there might
@@ -219,6 +277,30 @@ impl BloomFilter {
 
     pub fn size_in_bytes(&self) -> usize {
         self.M as usize * core::mem::size_of::<u64>()
+    }
+
+    #[inline(always)]
+    pub fn has_same_params(&self, other: &Self) -> bool {
+        self.n == other.n
+            && self.p == other.p
+            && self.k == other.k
+            && self.m == other.m
+            && self.M == other.M
+    }
+
+    pub fn union(&mut self, other: &Self) -> Result<(), Error> {
+        if !self.has_same_params(other) {
+            return Err(Error::Union);
+        }
+
+        for (i, e) in self.v.iter_mut().enumerate() {
+            *e |= other.v[i];
+        }
+
+        // we need to update the estimated number of elements after a union
+        self.update_count();
+
+        Ok(())
     }
 }
 
@@ -263,10 +345,10 @@ impl Fnv1Hasher {
 // bloom![cap, prob, {values...}]
 #[macro_export]
 macro_rules! bloom {
-        ($cap:literal, $proba:literal) => {
+        ($cap:expr, $proba:expr) => {
             $crate::BloomFilter::with_capacity($cap, $proba)
         };
-        ($cap:literal, $proba:literal, [$($values:literal),*]) => {
+        ($cap:expr, $proba:expr, [$($values:literal),*]) => {
             {
                 let mut b=bloom!($cap, $proba);
                 $(b.insert($values);)*
