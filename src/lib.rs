@@ -46,7 +46,7 @@ impl Iterator for Fingerprint {
         if self.i < self.size {
             self.hn = self.hn.wrapping_mul(G);
             self.hn %= M;
-            self.i += 1;
+            self.i = self.i.wrapping_add(1);
             return Some(self.hn % self.m);
         }
         None
@@ -104,7 +104,7 @@ impl BloomFilter {
     pub fn with_capacity(cap: u64, proba: f64) -> Self {
         // size in bits, computed from the capacity we want and the probability
         let bit_size = f64::abs(f64::ceil(
-            (cap as f64) * f64::log2(proba) / f64::log2(2.0).powf(2.0),
+            (cap as f64) * f64::ln(proba) / f64::ln(2.0).powf(2.0),
         ));
 
         // size in bytes
@@ -114,7 +114,7 @@ impl BloomFilter {
             v: vec![0; u64_size],
             n: cap,
             p: proba,
-            k: f64::ceil(f64::log2(2.0) * bit_size / (cap as f64)) as u64,
+            k: f64::ceil(f64::ln(2.0) * bit_size / (cap as f64)) as u64,
             m: bit_size as u64,
             N: 0,
             M: u64_size as u64,
