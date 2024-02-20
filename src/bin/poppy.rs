@@ -98,12 +98,16 @@ struct Insert {
     jobs: usize,
     /// File containing the bloom filter to update
     file: String,
-    /// Input files containing one entry per line
+    /// Input files containing one entry per line, if no files is specified
+    /// entries to insert are read from stdin
     inputs: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
 struct Check {
+    /// checks input from stdin
+    #[clap(long)]
+    stdin: bool,
     /// Numbers of parallel jobs to check bloom filter
     #[clap(short, long, default_value = "2")]
     jobs: usize,
@@ -112,7 +116,8 @@ struct Check {
     verify: bool,
     /// File containing the bloom filter
     file: String,
-    /// Input files containing one entry per line
+    /// Input files containing one entry per line, if no files is specified
+    /// entries to check are read from stdin
     inputs: Vec<String>,
 }
 
@@ -136,7 +141,7 @@ fn main() -> Result<(), anyhow::Error> {
             let bf = Arc::new(std::sync::Mutex::new(BloomFilter::from_reader(bloom_file)?));
 
             // if we pipe in entries via stdin
-            if o.stdin {
+            if o.stdin || o.inputs.is_empty() {
                 let mut bf = bf.lock().unwrap();
                 for line in std::io::BufReader::new(io::stdin()).lines() {
                     bf.insert(line?)
@@ -188,51 +193,71 @@ fn main() -> Result<(), anyhow::Error> {
             let mut output = File::create(o.file)?;
             bf.lock().unwrap().write(&mut output)?;
         }
+
         Command::Check(o) => {
             let bloom_file = File::open(&o.file)?;
             let bf = Arc::new(std::sync::RwLock::new(BloomFilter::from_reader(
                 bloom_file,
             )?));
 
-            let mut handles = vec![];
-            let files = o.inputs.clone();
-
-            let batches = files.chunks(max(files.len() / o.jobs, 1));
-
-            for batch in batches {
-                let shared = Arc::clone(&bf);
-                let batch: Vec<String> = batch.to_vec();
-
-                let h = thread::spawn(move || {
-                    let bf = shared
-                        .read()
-                        .map_err(|e| anyhow!("failed to lock mutex: {}", e))?;
-
-                    for input in batch {
-                        let in_file = std::fs::File::open(&input)?;
-
-                        for line in std::io::BufReader::new(in_file).lines() {
-                            let line = line?;
-                            if o.verify {
-                                if !bf.contains(&line) {
-                                    println!("{line}: NOK")
-                                }
-                                continue;
-                            }
-
-                            if bf.contains(&line) {
-                                println!("{line}: OK")
-                            }
+            if o.stdin || o.inputs.is_empty() {
+                let bf = bf.read().unwrap();
+                for line in std::io::BufReader::new(io::stdin()).lines() {
+                    let line = line?;
+                    if o.verify {
+                        if !bf.contains(&line) {
+                            println!("{line}: NOK")
                         }
+                        continue;
                     }
 
-                    Ok::<(), anyhow::Error>(())
-                });
-                handles.push(h)
+                    if bf.contains(&line) {
+                        println!("{line}")
+                    }
+                }
             }
 
-            for h in handles {
-                h.join().expect("failed to join thread")?;
+            if !o.inputs.is_empty() {
+                let mut handles = vec![];
+                let files = o.inputs.clone();
+
+                let batches = files.chunks(max(files.len() / o.jobs, 1));
+
+                for batch in batches {
+                    let shared = Arc::clone(&bf);
+                    let batch: Vec<String> = batch.to_vec();
+
+                    let h = thread::spawn(move || {
+                        let bf = shared
+                            .read()
+                            .map_err(|e| anyhow!("failed to lock mutex: {}", e))?;
+
+                        for input in batch {
+                            let in_file = std::fs::File::open(&input)?;
+
+                            for line in std::io::BufReader::new(in_file).lines() {
+                                let line = line?;
+                                if o.verify {
+                                    if !bf.contains(&line) {
+                                        println!("{line}: NOK")
+                                    }
+                                    continue;
+                                }
+
+                                if bf.contains(&line) {
+                                    println!("{line}")
+                                }
+                            }
+                        }
+
+                        Ok::<(), anyhow::Error>(())
+                    });
+                    handles.push(h)
+                }
+
+                for h in handles {
+                    h.join().expect("failed to join thread")?;
+                }
             }
         }
         Command::Show(o) => {
