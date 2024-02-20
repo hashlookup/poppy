@@ -3,7 +3,6 @@ use std::{
     fmt::Display,
     fs::File,
     io::{self, BufRead},
-    mem::size_of,
     sync::Arc,
     thread,
 };
@@ -223,8 +222,6 @@ fn main() -> Result<(), anyhow::Error> {
 
                             if bf.contains(&line) {
                                 println!("{line}: OK")
-                            } else {
-                                println!("{line}: NOK")
                             }
                         }
                     }
@@ -251,7 +248,7 @@ fn main() -> Result<(), anyhow::Error> {
             println!("\tLength of data={}", ByteSize::from_bytes(b.data.len()));
             println!(
                 "\tSize of bloom filter={}",
-                ByteSize::from_bytes(b.M as usize * size_of::<u64>())
+                ByteSize::from_bytes(b.size_in_bytes())
             );
         }
     }
