@@ -29,7 +29,7 @@ impl Fingerprint {
     #[inline(always)]
     pub fn with_size<H: std::hash::Hasher + Default>(data: &[u8], modulo: u64, size: u64) -> Self {
         let mut hasher: H = H::default();
-        hasher.write(data.as_ref());
+        hasher.write(data);
         Self {
             hn: hasher.finish(),
             m: modulo,
@@ -196,19 +196,27 @@ impl BloomFilter {
     #[inline(always)]
     /// get the nth bit value
     fn get_nth_bit(&self, index: u64) -> bool {
-        let block = index / 64;
-        let bit = index % 64;
-        self.v[block as usize] & (1u64 << bit) == (1u64 << bit)
+        let iblock = index / 64;
+        let ibit = index % 64;
+        // we cannot overflow shift as ibit < 64
+        let bit = 1u64.wrapping_shl(ibit as u32);
+        self.v[iblock as usize] & bit == bit
     }
 
     #[inline(always)]
     /// set the nth bit and returns old value
     fn set_nth_bit(&mut self, index: u64) -> bool {
-        let block = index / 64;
-        let bit = index % 64;
+        let iblock = index / 64;
+        let ibit = index % 64;
+        let entry = self
+            .v
+            .get_mut(iblock as usize)
+            .expect("block index out of bound");
+        // we cannot overflow shift as ibit < 64
+        let bit = 1u64.wrapping_shl(ibit as u32);
         // this is the old bit value
-        let old = self.v[block as usize] & (1u64 << bit) == (1u64 << bit);
-        self.v[block as usize] |= 1u64 << bit;
+        let old = *entry & bit == bit;
+        *entry |= bit;
         old
     }
 
