@@ -91,6 +91,9 @@ struct Insert {
     /// Reads input from stdin
     #[clap(long)]
     stdin: bool,
+    /// Force data insertion, eventually breaking bloom filter FP rate
+    #[clap(long)]
+    force: bool,
     /// The number of jobs to use to insert into the bloom filter. The original
     /// filter is copied into the memory of each job so you can expect the memory
     /// of the whole process to be N times the size of the (uncompressed) bloom filter.
@@ -144,7 +147,11 @@ fn main() -> Result<(), anyhow::Error> {
             if o.stdin || o.inputs.is_empty() {
                 let mut bf = bf.lock().unwrap();
                 for line in std::io::BufReader::new(io::stdin()).lines() {
-                    bf.insert(line?)
+                    if o.force {
+                        bf.insert_unchecked(line?)
+                    } else {
+                        bf.insert(line?)?
+                    }
                 }
             }
 
@@ -171,7 +178,11 @@ fn main() -> Result<(), anyhow::Error> {
                             let in_file = std::fs::File::open(&input)?;
 
                             for line in std::io::BufReader::new(in_file).lines() {
-                                copy.insert(line?);
+                                if o.force {
+                                    copy.insert_unchecked(line?)
+                                } else {
+                                    copy.insert(line?)?
+                                }
                             }
                         }
 
@@ -269,7 +280,7 @@ fn main() -> Result<(), anyhow::Error> {
             println!("\tk (number of hash fn)={}", b.n_hash_fn());
             println!("\tm (number of bits)={}", b.n_bits());
             println!("\tN (estimated number of elements)={}", b.count_estimate());
-            println!("\tM (number of u64)={}", b.M);
+            println!("\tM (number of u64)={}", b.size_in_u64());
             println!("\tLength of data={}", ByteSize::from_bytes(b.data.len()));
             println!(
                 "\tSize of bloom filter={}",
