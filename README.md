@@ -12,6 +12,9 @@ cargo build --release --bins
 ## Building with MUSL (static binary)
 
 ```bash
+# You can skip this step if you already have musl installed
+rustup target add x86_64-unknown-linux-musl
+# Build poppy with musl target
 cargo build --release --target=x86_64-unknown-linux-musl --bins
 ```
 
