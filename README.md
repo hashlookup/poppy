@@ -1,5 +1,10 @@
+# poppy - Rust implementation of the DCSO Bloom filter tool
 
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/hashlookup/poppy/rust.yml?style=for-the-badge)
+
+Bloom is a straightforward tool offering an efficient implementation of the Bloom filter for the Rust language. It includes a command-line tool that allows users
+to effortlessly create [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter) with their desired capacity and false positive probability.
+Values can be added to the filters via standard input, facilitating the use of this tool in a pipeline workflow. poppy is compatible with the [DCSO bloom software](https://github.com/DCSO/bloom).
 
 # Building
 
