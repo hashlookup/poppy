@@ -120,6 +120,9 @@ struct Benchmark {
     /// Number of runs to compute statistics
     #[clap(short, long, default_value_t = 5)]
     runs: u32,
+    /// Allowed tolerance on false positive proba before raising error
+    #[clap(short, long, default_value_t = 0.05)]
+    fp_tol: f64,
     /// File containing the bloom filter.
     file: String,
     /// Input files containing one entry per line. To have a relevant
@@ -461,7 +464,7 @@ fn main() -> Result<(), anyhow::Error> {
                 println!("\tfp rate = {:3}", stats.fp_rate());
                 println!();
 
-                if stats.fp_rate() > b.proba() + b.proba() * 0.05 {
+                if stats.fp_rate() > b.proba() + b.proba() * o.fp_tol {
                     return Err(anyhow!("bloom filter fp rate is not respected"));
                 }
             }
