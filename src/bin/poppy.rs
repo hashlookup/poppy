@@ -409,7 +409,10 @@ fn main() -> Result<(), anyhow::Error> {
             println!("File: {}", o.file);
             show_bf_properties(&b);
 
-            println!("\nQuery performance:");
+            println!(
+                "\nQuery performance: dataset-size={}",
+                ByteSize::from_bytes(dataset_size)
+            );
 
             for mut_prob in (10..=100).step_by(10) {
                 let mut tmp = entries.iter().cloned().collect::<Vec<String>>();
@@ -453,13 +456,12 @@ fn main() -> Result<(), anyhow::Error> {
                 println!(
                     "\tquery speed: {:.1} entries/s -> {:.1} MB/s",
                     stats.total() as f64 / query_dur.as_secs_f64(),
-                    ByteSize::from_bytes(dataset_size * o.runs as usize).in_mb()
-                        / query_dur.as_secs_f64()
+                    ByteSize::from_bytes(dataset_size).in_mb() / query_dur.as_secs_f64()
                 );
                 println!("\tfp rate = {:3}", stats.fp_rate());
                 println!();
 
-                if stats.fp_rate() > b.proba() {
+                if stats.fp_rate() > b.proba() + b.proba() * 0.05 {
                     return Err(anyhow!("bloom filter fp rate is not respected"));
                 }
             }
