@@ -30,7 +30,6 @@ impl Hasher for Fnv1Hasher {
 }
 
 impl Fnv1Hasher {
-    // ToDo move this to a generic taking a Hasher as param
     pub fn digest<S: AsRef<[u8]>>(s: S) -> u64 {
         let mut h = Self::default();
         h.write(s.as_ref());
@@ -40,6 +39,11 @@ impl Fnv1Hasher {
 
 #[cfg(test)]
 mod test {
+    use std::{
+        collections::HashSet,
+        io::{self, BufRead},
+    };
+
     use super::*;
 
     #[test]
@@ -59,5 +63,38 @@ mod test {
         hasher.write("Hello, ".as_bytes());
         hasher.write("World!".as_bytes());
         assert_eq!(hasher.finish(), 8889723880822884486)
+    }
+
+    #[test]
+    #[ignore]
+    fn test_fnv_collisions() {
+        let data = include_bytes!("./data/sample.txt");
+        let reader = io::BufReader::new(io::Cursor::new(data));
+        let lines: HashSet<String> = reader
+            .lines()
+            .map_while(Result::ok)
+            .collect::<HashSet<String>>();
+
+        let mut collisions = HashSet::new();
+        let mut total = 0f64;
+        let mut n_collisions = 0f64;
+        let mut tn = 0f64;
+
+        for line in lines {
+            if !collisions.insert(Fnv1Hasher::digest(line)) {
+                n_collisions += 1.0
+            } else {
+                tn += 1.0
+            }
+            total += 1.0
+        }
+
+        println!("total number of values: {total}");
+        println!(
+            "% fnv collisions: {} -> {:.2}%",
+            n_collisions,
+            n_collisions * 100.0 / total
+        );
+        println!("% fnv fp rate: {:.4}", n_collisions / (tn + n_collisions));
     }
 }
