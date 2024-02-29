@@ -10,6 +10,9 @@ use std::{
 };
 use thiserror::Error;
 
+mod utils;
+pub use utils::*;
+
 pub const DEFAULT_VERSION: u8 = 2;
 
 fn read_le_u64<R: Read>(r: &mut R) -> Result<u64, io::Error> {
@@ -58,16 +61,15 @@ impl Params {
 
     #[inline]
     pub fn estimate_p(&self, n: u64) -> f64 {
-        BloomFilter::estimate_p(n, self.bit_size())
+        utils::estimate_p(n, self.bit_size())
     }
 
     #[inline]
     pub fn bit_size(&self) -> u64 {
-        BloomFilter::bit_size(self.cap, self.proba)
+        utils::bit_size(self.cap, self.proba)
     }
 }
 
-#[allow(non_snake_case)]
 #[derive(Debug, Clone)]
 pub struct BloomFilter {
     version: u8,
@@ -111,36 +113,11 @@ impl From<Params> for BloomFilter {
 }
 
 impl BloomFilter {
-    #[inline(always)]
-    fn k(bit_size: u64, cap: u64) -> u64 {
-        f64::ceil(f64::ln(2.0) * bit_size as f64 / (cap as f64)) as u64
-    }
-
-    #[inline(always)]
-    pub fn bit_size(cap: u64, proba: f64) -> u64 {
-        f64::abs(f64::ceil(
-            (cap as f64) * f64::ln(proba) / f64::ln(2.0).powf(2.0),
-        )) as u64
-    }
-
-    #[inline(always)]
-    /// estimates the false positive probability given a number of element in a bloom
-    /// filter and its size in bits
-    fn estimate_p(n: u64, bit_size: u64) -> f64 {
-        let k = Self::k(bit_size, n);
-        (1.0 - f64::exp(-(k as f64) * n as f64 / bit_size as f64)).powf(k as f64)
-    }
-
-    #[inline(always)]
-    fn cap_from_bit_size(bit_size: u64, proba: f64) -> u64 {
-        f64::abs(bit_size as f64 * f64::ln(2.0).powf(2.0) / f64::ln(proba)) as u64
-    }
-
     fn pow2_caps_for_proba(proba: f64, max_bit_size: u64) -> Vec<u64> {
         let step = 100;
         let mut marked = HashSet::new();
         for i in 0..63 {
-            let cap = Self::cap_from_bit_size(1 << i, proba);
+            let cap = utils::cap_from_bit_size(1 << i, proba);
             let start = {
                 if cap >= step {
                     cap - step
@@ -155,7 +132,7 @@ impl BloomFilter {
             };
 
             for c in start..stop {
-                let bs = BloomFilter::bit_size(c, proba);
+                let bs = utils::bit_size(c, proba);
                 if is_power_of_2(bs) && !marked.contains(&c) && bs <= max_bit_size {
                     marked.insert(c);
                 }
@@ -169,7 +146,7 @@ impl BloomFilter {
     pub fn possible_optimizations(n: u64, proba: f64) -> Vec<Params> {
         let mut params = HashSet::new();
 
-        let bs = BloomFilter::bit_size(n, proba);
+        let bs = utils::bit_size(n, proba);
 
         for bs in [prev_power_of_2(bs), next_power_of_2(bs)] {
             let mut p = 0.5;
@@ -204,12 +181,12 @@ impl BloomFilter {
         let version = DEFAULT_VERSION;
 
         // size in bits, computed from the capacity we want and the probability
-        let bit_size = Self::bit_size(cap, proba);
+        let bit_size = utils::bit_size(cap, proba);
 
         // size in u64
         let u64_size = f64::ceil(bit_size as f64 / 64.0) as usize;
 
-        let n_hash_fn = Self::k(bit_size, cap);
+        let n_hash_fn = utils::k(bit_size, cap);
 
         Self {
             version,
@@ -240,7 +217,7 @@ impl BloomFilter {
 
     #[inline(always)]
     pub fn estimated_p(&self) -> f64 {
-        Self::estimate_p(self.count_estimate(), self.bit_size)
+        utils::estimate_p(self.count_estimate(), self.bit_size)
     }
 
     #[inline(always)]
@@ -514,8 +491,8 @@ impl BloomFilter {
 /// use poppy::bloom;
 ///
 /// let mut b = bloom!(100, 0.1, ["hello", "world"]);
-/// assert!(b.contains("hello"));
-/// assert!(b.contains("world"));
+/// assert!(b.contains_bytes("hello"));
+/// assert!(b.contains_bytes("world"));
 /// ```
 #[macro_export]
 macro_rules! bloom {
@@ -525,14 +502,14 @@ macro_rules! bloom {
         ($cap:expr, $proba:expr, [$($values:literal),*]) => {
             {
                 let mut b=bloom!($cap, $proba);
-                $(b.insert($values).unwrap();)*
+                $(b.insert_bytes($values).unwrap();)*
                 b
             }
         };
     }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use std::{
         collections::HashSet,
         fs,
@@ -671,12 +648,12 @@ mod tests {
         let proba = 0.001;
 
         let bucket_size = 4096;
-        let c = BloomFilter::cap_from_bit_size(bucket_size * 8, proba);
+        let c = utils::cap_from_bit_size(bucket_size * 8, proba);
         let n_bucket = (n as f64 / c as f64).ceil() as u64;
         println!(
             "cap_per_bucket={c} n_bucket={n_bucket} size={} one_vec={}",
             ByteSize::from_bytes((bucket_size * n_bucket) as usize),
-            ByteSize::from_bits(BloomFilter::bit_size(n, proba) as usize),
+            ByteSize::from_bits(utils::bit_size(n, proba) as usize),
         )
     }
 
@@ -701,17 +678,17 @@ mod tests {
 
         println!(
             "initial: cap={n} proba={proba} bs={}",
-            ByteSize::from_bits(BloomFilter::bit_size(n, proba) as usize)
+            ByteSize::from_bits(utils::bit_size(n, proba) as usize)
         );
         println!(
             "optimized: cap={} proba={} bs={bs} -> {} estimated_proba={}",
             p.cap,
             p.proba,
             ByteSize::from_bits(bs as usize),
-            BloomFilter::estimate_p(n, bs),
+            utils::estimate_p(n, bs),
         );
 
-        assert!(is_power_of_2(BloomFilter::bit_size(p.cap, p.proba)));
+        assert!(is_power_of_2(utils::bit_size(p.cap, p.proba)));
         assert!(p.cap >= n);
     }
 
@@ -749,21 +726,33 @@ mod tests {
     #[ignore]
     fn benchmark_bloom() {
         let mut rng: StdRng = SeedableRng::from_seed([42; 32]);
-        let data = include_bytes!("./data/sample.txt");
 
-        let reader = io::BufReader::new(io::Cursor::new(data));
+        let test_files = vec![current_dir!().join("data/sample.txt")];
 
-        let lines = reader
-            .lines()
-            .map_while(Result::ok)
-            .collect::<HashSet<String>>();
+        let mut lines = HashSet::new();
+        let mut dataset_size = 0;
+        for t in test_files {
+            let f = fs::File::open(t).unwrap();
+            let reader = io::BufReader::new(f);
+            for line in reader.lines() {
+                let line = line.unwrap();
+                let size = line.as_bytes().len();
+                if lines.insert(line) {
+                    dataset_size += size
+                }
+            }
+        }
 
         let count = lines.len() as u64;
         let fp_rate = 0.001;
-        let p = BloomFilter::optimize(count, fp_rate).unwrap();
+        //let p = BloomFilter::optimize(count, fp_rate).unwrap();
+        let p = Params {
+            cap: count,
+            proba: fp_rate,
+        };
 
-        let mut b = p.into_bloom_filter().with_version(2).unwrap();
-        let mb_size = data.len() as f64 / 1_048_576.0;
+        let mut b = p.into_bloom_filter().with_version(1).unwrap();
+        let mb_size = dataset_size as f64 / 1_048_576.0;
         let runs = 5;
 
         let insert_dur = time_it(
@@ -771,7 +760,7 @@ mod tests {
             runs,
         );
 
-        let bit_size = BloomFilter::bit_size(count, fp_rate);
+        let bit_size = utils::bit_size(count, fp_rate);
         eprintln!("version of bloom-filter: {}", b.version());
         eprintln!("count: {}", count);
         eprintln!("proba: {}", fp_rate);
@@ -779,12 +768,12 @@ mod tests {
             "bit_size:{} optimized: {} expected_proba: {}",
             ByteSize::from_bits(bit_size as usize),
             is_power_of_2(bit_size),
-            BloomFilter::estimate_p(lines.len() as u64, bit_size),
+            utils::estimate_p(lines.len() as u64, bit_size),
         );
         eprintln!(
             "data: {} entries -> {}",
             count,
-            ByteSize::from_bytes(data.len())
+            ByteSize::from_bytes(dataset_size)
         );
 
         eprintln!("\nInsertion performance:");

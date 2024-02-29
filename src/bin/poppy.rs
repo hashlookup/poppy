@@ -174,8 +174,7 @@ fn main() -> Result<(), anyhow::Error> {
 
                 println!("Unoptimized parameters:");
                 // original size
-                let os =
-                    ByteSize::from_bits(BloomFilter::bit_size(o.capacity, o.probability) as usize);
+                let os = ByteSize::from_bits(poppy::bit_size(o.capacity, o.probability) as usize);
                 println!("\tcap={} proba={} size={}\n", o.capacity, o.probability, os);
 
                 let opts = BloomFilter::possible_optimizations(o.capacity, o.probability);
