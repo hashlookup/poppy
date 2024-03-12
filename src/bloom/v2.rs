@@ -1,8 +1,99 @@
-use std::{io, slice};
+use std::{
+    io::{self, BufWriter, Read, Write},
+    slice,
+};
 
-use thiserror::Error;
+use core::mem::size_of;
 
-use crate::ahash::BloomAHasher;
+use crate::{
+    ahash::BloomAHasher,
+    utils::{read_le_f64, read_le_u64},
+    OptLevel,
+};
+
+// N gives the size in Bytes of the bucket
+#[derive(Debug, Clone)]
+pub struct VecBitSet(Vec<u8>);
+
+impl VecBitSet {
+    pub fn with_bit_capacity(cap: usize) -> Self {
+        let byte_size = ((cap as f64) / 8.0).ceil() as usize;
+        Self(vec![0; byte_size])
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.0.as_mut_slice()
+    }
+
+    #[inline(always)]
+    fn set_nth_bit(&mut self, index: usize) -> bool {
+        let iblock = index / 8;
+        // equivalent to index % 8
+        let mask = 1u8 << (index & 7);
+        let old = self.0[iblock] & mask == mask;
+        self.0[iblock] |= mask;
+        old
+    }
+
+    #[inline(always)]
+    fn get_nth_bit(&self, index: usize) -> bool {
+        let iblock = index / 8;
+        // equivalent to index % 8
+        let mask = 1u8 << (index & 7);
+        self.0[iblock] & mask == mask
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.0.iter_mut().for_each(|b| *b = 0);
+    }
+
+    #[inline]
+    pub fn bit_len(&self) -> usize {
+        self.0.len() * 8
+    }
+
+    #[inline]
+    pub fn byte_len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    pub fn count_ones(&self) -> usize {
+        self.0.iter().map(|b| b.count_ones() as usize).sum()
+    }
+
+    #[inline]
+    pub fn union(&mut self, other: &Self) {
+        (0..self.0.len()).for_each(|i| self.0[i] |= other.0[i])
+    }
+
+    #[inline]
+    pub fn intersection(&mut self, other: &Self) {
+        (0..self.0.len()).for_each(|i| self.0[i] &= other.0[i])
+    }
+
+    #[inline]
+    pub fn count_ones_in_common(&self, other: &Self) -> usize {
+        (0..self.0.len())
+            .map(|i| (self.0[i] & other.0[i]).count_ones() as usize)
+            .sum()
+    }
+
+    #[inline]
+    pub fn count_zeros(&self) -> usize {
+        self.0.iter().map(|b| b.count_zeros() as usize).sum()
+    }
+}
 
 // N gives the size in Bytes of the bucket
 #[derive(Debug, Clone)]
@@ -87,6 +178,14 @@ pub struct IndexIterator<const M: u64> {
     count: u64,
 }
 
+#[inline(always)]
+fn xor_shift(mut xs: u64) -> u64 {
+    xs ^= xs.wrapping_shl(13);
+    xs ^= xs.wrapping_shr(17);
+    xs ^= xs.wrapping_shl(5);
+    xs
+}
+
 impl<const M: u64> IndexIterator<M> {
     fn new(count: u64) -> Self {
         Self {
@@ -99,16 +198,22 @@ impl<const M: u64> IndexIterator<M> {
     fn bucket_hash(&self) -> u64 {
         // we use xor shift to pseudo randomize bucket hash
         // decrease collisions on h % m
-        let mut xs = self.h1;
-        xs ^= xs.wrapping_shl(13);
-        xs ^= xs.wrapping_shr(17);
-        xs ^= xs.wrapping_shl(5);
-        xs
+        xor_shift(self.h1)
     }
 
     #[inline(always)]
     fn init_with_data<S: AsRef<[u8]>>(mut self, data: S) -> Self {
-        self.h1 = BloomAHasher::digest(&data);
+        if data.as_ref().len() > size_of::<u64>() {
+            self.h1 = BloomAHasher::digest(&data);
+        } else {
+            // if data is smaller than u64 we don't need to hash it
+            let mut tmp = [0u8; size_of::<u64>()];
+            data.as_ref()
+                .iter()
+                .enumerate()
+                .for_each(|(i, &b)| tmp[i] = b);
+            self.h1 = u64::from_le_bytes(tmp);
+        }
         self.h2 = 0;
         self.i = 0;
         self
@@ -125,6 +230,11 @@ impl<const M: u64> Iterator for IndexIterator<M> {
             if self.i > 0 {
                 // we init h2 only if we passed already one iteration
                 if self.i == 1 {
+                    // here we propagate hash algorithm collision to index
+                    // collision. This means we will never be able to achieve
+                    // fpp < hash_collision_rate. However AHash has a very low
+                    // collision rate (i.e. 0% for decent dataset sizes we want
+                    // to store in a BF) so it should not be an issue.
                     self.h2 = BloomAHasher::digest(self.h1.to_be_bytes());
                 }
                 self.h1 = self.h1.wrapping_add(self.h2);
@@ -142,17 +252,7 @@ impl<const M: u64> Iterator for IndexIterator<M> {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("{0}")]
-    IoError(#[from] io::Error),
-    #[error("invalid version {0}")]
-    InvalidVersion(u8),
-    #[error("union error: {0}")]
-    Merge(String),
-    #[error("too many entries, false positive rate cannot be met")]
-    TooManyEntries,
-}
+type Error = crate::Error;
 
 const BUCKET_SIZE: usize = 4096;
 const BIT_SET_MOD: u64 = (BUCKET_SIZE * 8) as u64;
@@ -160,40 +260,132 @@ type Bucket = BitSet<BUCKET_SIZE>;
 
 #[derive(Debug, Clone)]
 pub struct BloomFilter {
+    /// this is used to speed up lookup and stabilize it
+    /// it is not used by default as it increases bloom
+    /// filter size
+    index_cache: VecBitSet,
     /// the maximum of entries the filter can contains without
     /// impacting the desired false positive probability
-    capacity: u64,
+    pub(crate) capacity: u64,
     /// desired false positive probability
-    fpp: f64,
+    pub(crate) fpp: f64,
     /// number of hash functions
-    n_hash_buck: u64,
+    pub(crate) n_hash_buck: u64,
     /// estimated number of elements in the filter
-    count: u64,
+    pub(crate) count: u64,
     /// buckets of small but optimized for speed bloom filters
-    buckets: Vec<Bucket>,
+    pub(crate) buckets: Vec<Bucket>,
     /// arbitrary data that we can attach to the filter
     pub data: Vec<u8>,
 }
 
 impl BloomFilter {
-    pub fn with_capacity(cap: u64, proba: f64) -> Self {
+    #[inline]
+    pub fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
+        let mut br = io::BufReader::new(r);
+        let r = &mut br;
+
+        let capacity = read_le_u64(r)?;
+        let fpp = read_le_f64(r)?;
+        let n_hash_buck = read_le_u64(r)?;
+        let count = read_le_u64(r)?;
+
+        let cache_bit_size = read_le_u64(r)? as usize;
+        let mut index_cache = VecBitSet::with_bit_capacity(cache_bit_size);
+        r.read_exact(index_cache.as_mut_slice())?;
+
+        // we read the number of buckets
+        let n_buckets = read_le_u64(r)? as usize;
+        let mut buckets = vec![Bucket::new(); n_buckets];
+
+        // we read all the buckets as byte buffers
+        for bucket in buckets.iter_mut().take(n_buckets) {
+            r.read_exact(bucket.0.as_mut_slice())?;
+        }
+
+        // reading data
+        let mut data = Vec::new();
+        r.read_to_end(&mut data)?;
+
+        Ok(Self {
+            index_cache,
+            capacity,
+            fpp,
+            n_hash_buck,
+            count,
+            buckets,
+            data,
+        })
+    }
+
+    #[inline]
+    pub fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
+        let mut w = BufWriter::new(w);
+
+        w.write_all(&self.capacity.to_le_bytes())?;
+        w.write_all(&self.fpp.to_le_bytes())?;
+        w.write_all(&self.n_hash_buck.to_le_bytes())?;
+        w.write_all(&self.count.to_le_bytes())?;
+
+        // bit capacity of index cache
+        w.write_all(&(self.index_cache.bit_len() as u64).to_le_bytes())?;
+        // we write index cache
+        w.write_all(self.index_cache.as_slice())?;
+
+        // the number of buckets as u64
+        w.write_all(&(self.buckets.len() as u64).to_le_bytes())?;
+
+        // we serialize buckets
+        for i in self.buckets.iter() {
+            w.write_all(&i.0)?;
+        }
+
+        w.write_all(&self.data)?;
+        Ok(())
+    }
+
+    pub(crate) fn make(capacity: u64, fpp: f64, opt: OptLevel) -> Self {
         // the capacity per bucket given a fpp
-        let bucket_cap = crate::cap_from_bit_size(Bucket::bit_size() as u64, proba);
+        let bucket_cap = crate::cap_from_bit_size(Bucket::bit_size() as u64, fpp);
         let bucket_bit_size = Bucket::bit_size() as u64;
         // the number of buckets we need to store all data
-        let n_bucket = (cap as f64 / bucket_cap as f64).ceil() as u64;
 
-        // number of hash func per bucket
-        let n_hash_buck: u64 = crate::k(bucket_bit_size, bucket_cap);
+        let mut n_bucket = (capacity as f64 / bucket_cap as f64).ceil() as u64;
+        let mut n_hash_buck = (crate::k(bucket_bit_size, bucket_cap) as f64).ceil() as u64;
+
+        let mut cache_bit_size = 0;
+        let bits_per_entry = (bucket_bit_size as f64 / (bucket_cap as f64)).round();
+
+        match opt {
+            OptLevel::None | OptLevel::Space => {}
+            OptLevel::Speed => {
+                cache_bit_size = capacity.next_power_of_two();
+                n_bucket = n_bucket.next_power_of_two();
+                n_hash_buck =
+                    (f64::ln(2.0) * crate::estimate_p(capacity, cache_bit_size) * (bits_per_entry))
+                        .ceil() as u64;
+            }
+            OptLevel::Best => {
+                cache_bit_size = capacity.next_power_of_two();
+                n_hash_buck =
+                    (f64::ln(2.0) * crate::estimate_p(capacity, cache_bit_size) * (bits_per_entry))
+                        .ceil() as u64;
+            }
+        }
 
         Self {
+            index_cache: VecBitSet::with_bit_capacity(cache_bit_size as usize),
             buckets: vec![Bucket::new(); n_bucket as usize],
-            capacity: cap,
-            fpp: proba,
+            capacity,
+            fpp,
             n_hash_buck,
             count: 0,
             data: vec![],
         }
+    }
+
+    pub fn with_capacity(cap: u64, proba: f64) -> Self {
+        Self::make(cap, proba, OptLevel::Speed)
     }
 
     // moving this as a structure member does not improve perfs
@@ -249,6 +441,11 @@ impl BloomFilter {
             self.count += 1;
         }
 
+        if !self.index_cache.is_empty() {
+            self.index_cache
+                .set_nth_bit(h as usize & (self.index_cache.bit_len() - 1));
+        }
+
         Ok(new)
     }
 
@@ -265,6 +462,14 @@ impl BloomFilter {
 
         let h = it.bucket_hash();
 
+        if !self.index_cache.is_empty()
+            && !self
+                .index_cache
+                .get_nth_bit(h as usize & (self.index_cache.bit_len() - 1))
+        {
+            return false;
+        }
+
         let ibucket = {
             if self.is_optimal() {
                 h & (self.buckets.len() as u64 - 1)
@@ -272,6 +477,7 @@ impl BloomFilter {
                 h % self.buckets.len() as u64
             }
         };
+
         let bucket = self
             .buckets
             .get(ibucket as usize)
@@ -307,7 +513,7 @@ impl BloomFilter {
 
     #[inline]
     pub fn size_in_bytes(&self) -> usize {
-        self.buckets.len() * Bucket::byte_size()
+        self.buckets.len() * Bucket::byte_size() + self.index_cache.byte_len()
     }
 
     /// this function estimates the number of common elements between two bloom filters
@@ -355,6 +561,7 @@ impl BloomFilter {
     #[inline(always)]
     pub fn has_same_params(&self, other: &Self) -> bool {
         self.capacity == other.capacity
+            && self.index_cache.byte_len() == other.index_cache.byte_len()
             && self.fpp == other.fpp
             && self.n_hash_buck == other.n_hash_buck
             && self.buckets.len() == other.buckets.len()
@@ -373,6 +580,7 @@ impl BloomFilter {
                 "cannot make union of bloom filters with different parameters".into(),
             ));
         }
+        self.index_cache.union(&other.index_cache);
         (0..self.buckets.len()).for_each(|i| self.buckets[i].union(&other.buckets[i]));
         // we need to update the count at the end of merge operation
         self.update_count();
@@ -392,43 +600,13 @@ impl BloomFilter {
                 "cannot make intersection of bloom filters with different parameters".into(),
             ));
         }
+        self.index_cache.intersection(&other.index_cache);
         (0..self.buckets.len()).for_each(|i| self.buckets[i].intersection(&other.buckets[i]));
         // we need to update the count at the end of merge operation
         self.update_count();
         Ok(())
     }
 }
-
-/// macro to ease bloom filter creation
-/// # Example
-/// ```
-/// use poppy::bloom;
-///
-/// let mut b = bloom!(100, 0.1);
-/// b.insert("hello");
-/// assert!(b.contains("hello"));
-/// ```
-///
-/// # Other Example
-/// ```
-/// use poppy::bloom;
-///
-/// let mut b = bloom!(100, 0.1, ["hello", "world"]);
-/// assert!(b.contains_bytes("hello"));
-/// assert!(b.contains_bytes("world"));
-/// ```
-macro_rules! bloom {
-        ($cap:expr, $proba:expr) => {
-            $crate::bloom2::BloomFilter::with_capacity($cap, $proba)
-        };
-        ($cap:expr, $proba:expr, [$($values:literal),*]) => {
-            {
-                let mut b=bloom!($cap, $proba);
-                $(b.insert_bytes($values).unwrap();)*
-                b
-            }
-        };
-    }
 
 #[cfg(test)]
 mod test {
@@ -441,7 +619,10 @@ mod test {
 
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
-    use crate::utils::{time_it, ByteSize};
+    use crate::{
+        estimate_p,
+        utils::{time_it, ByteSize, Stats},
+    };
 
     use super::*;
 
@@ -450,6 +631,19 @@ mod test {
             let file = std::path::PathBuf::from(file!());
             std::path::PathBuf::from(file.parent().unwrap())
         }};
+    }
+
+    macro_rules! bloom {
+        ($cap:expr, $proba:expr) => {
+            $crate::bloom::v2::BloomFilter::with_capacity($cap, $proba)
+        };
+        ($cap:expr, $proba:expr, [$($values:literal),*]) => {
+            {
+                let mut b=bloom!($cap, $proba);
+                $(b.insert_bytes($values).unwrap();)*
+                b
+            }
+        };
     }
 
     #[test]
@@ -465,6 +659,41 @@ mod test {
         for i in 0..Bucket::bit_size() {
             assert!(b.get_nth_bit(i));
         }
+    }
+
+    #[test]
+    fn test_bitset_fpp() {
+        //let cap = 424103097usize;
+        let cap = (1usize << 22) + 1;
+        let mut b = VecBitSet::with_bit_capacity(cap.next_power_of_two());
+        //let mut b = VecBitSet::with_bit_capacity(cap);
+
+        fn get_index(b: &VecBitSet, i: usize) -> usize {
+            (BloomAHasher::digest(i.to_le_bytes()) & (b.bit_len() as u64 - 1)) as usize
+        }
+
+        for i in 0..cap {
+            b.set_nth_bit(get_index(&b, i));
+        }
+
+        for i in 0..cap {
+            assert!(b.get_nth_bit(get_index(&b, i)));
+        }
+
+        let mut s = Stats::new();
+        for i in cap..cap * 10 {
+            if b.get_nth_bit(get_index(&b, i)) {
+                s.inc_fp()
+            } else {
+                s.inc_tn()
+            }
+        }
+
+        println!(
+            "estimated fp bitset: {}",
+            estimate_p(cap as u64, b.bit_len() as u64)
+        );
+        println!("real fp rate bitset: {}", s.fp_rate())
     }
 
     #[test]
@@ -520,10 +749,64 @@ mod test {
     }
 
     #[test]
+    fn test_small_data() {
+        // 25% tolerance on fpp
+        let tol = 0.25;
+        let count = 1000000;
+        let mut b = BloomFilter::make(count, 0.0001, OptLevel::None);
+        let mut s = Stats::new();
+
+        for i in 0..count {
+            b.insert(i).unwrap();
+            assert!(b.contains(i));
+        }
+
+        for i in count..count * 2 {
+            if b.contains(i) {
+                s.inc_fp();
+            } else {
+                s.inc_tn();
+            }
+        }
+
+        println!(
+            "fpp={} fp_rate={} n_hash_buck={}",
+            b.fpp,
+            s.fp_rate(),
+            b.n_hash_buck
+        );
+        assert!(s.fp_rate() < b.fpp * (1.0 + tol))
+    }
+
+    #[test]
+    fn test_serialization() {
+        let mut b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let mut data = vec![0; 256];
+        data.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8);
+
+        b.data = data.clone();
+
+        let mut cursor = io::Cursor::new(vec![]);
+        b.write(&mut cursor).unwrap();
+        println!("cursor position: {}", cursor.position());
+        cursor.set_position(0);
+        // deserializing the stuff out
+        let b = BloomFilter::from_reader(cursor).unwrap();
+        assert_eq!(b.fpp, 0.0001);
+        assert!(b.contains_bytes("deserialization"));
+        assert!(b.contains_bytes("test"));
+        assert!(!b.contains_bytes("hello"));
+        assert!(!b.contains_bytes("world"));
+        assert_eq!(b.data, data);
+        // last element must be 255
+        assert_eq!(b.data.last().unwrap(), &255);
+    }
+
+    #[test]
     #[ignore]
     fn benchmark_bloom() {
         let mut rng: StdRng = SeedableRng::from_seed([42; 32]);
-        let test_files = vec![current_dir!().join("data/sample.txt")];
+        let test_files = vec![current_dir!().join("../data/sample.txt")];
 
         let mut lines = HashSet::new();
         let mut dataset_size = 0;
@@ -638,6 +921,7 @@ mod test {
         }
 
         eprintln!("Size in bytes: {}", ByteSize::from_bytes(b.size_in_bytes()));
+        eprintln!("n_hash_buck: {}", b.n_hash_buck);
         eprintln!("\nCollision information:");
         eprintln!("\texpected collision rate: {}", fp_rate);
     }

@@ -1,4 +1,21 @@
-use std::{fmt::Display, hash::Hash, time::Duration};
+use std::{
+    fmt::Display,
+    hash::Hash,
+    io::{self, Read},
+    time::Duration,
+};
+
+pub(crate) fn read_le_u64<R: Read>(r: &mut R) -> Result<u64, io::Error> {
+    let mut bytes = [0u8; 8];
+    r.read_exact(bytes.as_mut_slice())?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+pub(crate) fn read_le_f64<R: Read>(r: &mut R) -> Result<f64, io::Error> {
+    let mut bytes = [0u8; 8];
+    r.read_exact(bytes.as_mut_slice())?;
+    Ok(f64::from_le_bytes(bytes))
+}
 
 pub enum ByteSize {
     Bytes(usize),
@@ -151,11 +168,13 @@ impl Stats {
     }
 
     pub fn inc_tp(&mut self) {
-        self.tp += 1.0
+        self.tp += 1.0;
+        self.total += 1
     }
 
     pub fn inc_fn(&mut self) {
-        self._fn += 1.0
+        self._fn += 1.0;
+        self.total += 1
     }
 
     pub fn inc_fp(&mut self) {
