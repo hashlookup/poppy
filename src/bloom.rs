@@ -119,8 +119,8 @@ impl BloomFilter {
         let version = (flags & 0xff) as u8;
 
         match version {
-            1 => Ok(Self::V1(v1::BloomFilter::from_reader(r)?)),
-            2 => Ok(Self::V2(v2::BloomFilter::from_reader(r)?)),
+            1 => Ok(Self::V1(v1::BloomFilter::from_reader_skip_version(r)?)),
+            2 => Ok(Self::V2(v2::BloomFilter::from_reader_skip_version(r)?)),
             _ => Err(Error::InvalidVersion(version)),
         }
     }
@@ -158,14 +158,8 @@ impl BloomFilter {
     #[inline]
     pub fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
         match self {
-            Self::V1(b) => {
-                w.write_all(1u64.to_le_bytes().as_ref())?;
-                b.write(w)
-            }
-            Self::V2(b) => {
-                w.write_all(2u64.to_le_bytes().as_ref())?;
-                b.write(w)
-            }
+            Self::V1(b) => b.write(w),
+            Self::V2(b) => b.write(w),
         }
     }
 

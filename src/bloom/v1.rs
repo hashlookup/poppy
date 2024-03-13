@@ -233,6 +233,19 @@ impl BloomFilter {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
+        let flags = read_le_u64(r)?;
+        let version = (flags & 0xff) as u8;
+        if version != 1 {
+            return Err(Error::InvalidVersion(version));
+        }
+        Self::from_reader_skip_version(r)
+    }
+
+    #[inline]
+    pub(crate) fn from_reader_skip_version<R: Read>(r: R) -> Result<Self, Error> {
+        let mut br = io::BufReader::new(r);
+        let r = &mut br;
+
         let cap = read_le_u64(r)?;
         let p = read_le_f64(r)?;
         let n_hash = read_le_u64(r)?;
@@ -274,6 +287,9 @@ impl BloomFilter {
     #[inline]
     pub fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
         let mut w = BufWriter::new(w);
+
+        // writing version
+        w.write_all(&1u64.to_le_bytes())?;
 
         w.write_all(&self.cap.to_le_bytes())?;
         w.write_all(&self.p.to_le_bytes())?;
@@ -518,10 +534,7 @@ mod test {
         // this test file has been generated with Go bloom cli
         let data = include_bytes!("../data/test.bloom");
         let pb = bloom!(10000, 0.01);
-        let mut r = io::BufReader::new(io::Cursor::new(data));
-        let mut version = [0u8; 8];
-        r.read_exact(version.as_mut_slice()).unwrap();
-        assert_eq!(u64::from_le_bytes(version), 1);
+        let r = io::BufReader::new(io::Cursor::new(data));
 
         let b = BloomFilter::from_reader(r).unwrap();
         // proba it's been serialzed with with Go implementation

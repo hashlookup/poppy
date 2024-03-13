@@ -285,6 +285,21 @@ impl BloomFilter {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
+        let flags = read_le_u64(r)?;
+        let version = (flags & 0xff) as u8;
+
+        if version != 2 {
+            return Err(Error::InvalidVersion(version));
+        }
+
+        Self::from_reader_skip_version(r)
+    }
+
+    #[inline]
+    pub(crate) fn from_reader_skip_version<R: Read>(r: R) -> Result<Self, Error> {
+        let mut br = io::BufReader::new(r);
+        let r = &mut br;
+
         let capacity = read_le_u64(r)?;
         let fpp = read_le_f64(r)?;
         let n_hash_buck = read_le_u64(r)?;
@@ -319,8 +334,11 @@ impl BloomFilter {
     }
 
     #[inline]
-    pub fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
+    pub(crate) fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
         let mut w = BufWriter::new(w);
+
+        // writting version
+        w.write_all(&2u64.to_le_bytes())?;
 
         w.write_all(&self.capacity.to_le_bytes())?;
         w.write_all(&self.fpp.to_le_bytes())?;
