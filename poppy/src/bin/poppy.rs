@@ -3,6 +3,7 @@ use std::{
     collections::HashSet,
     fs::File,
     io::{self, BufRead},
+    path::{Path, PathBuf},
     sync::Arc,
     thread,
 };
@@ -23,6 +24,15 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[derive(Debug, Parser)]
 pub struct Args {
+    /// Verbose output
+    #[clap(short, long)]
+    verbose: bool,
+    /// The number of jobs to use when parallelization is possible. For write operations
+    /// the original filter is copied into the memory of each job so you can expect
+    /// the memory of the whole process to be N times the size of the filter.
+    #[clap(short, long, default_value = "2")]
+    jobs: usize,
+    /// Poppy commands
     #[clap(subcommand)]
     command: Command,
 }
@@ -49,7 +59,8 @@ struct Create {
     /// Set to 1 if cross-compatibility with other DCSO libraries
     #[clap(short,long, default_value_t=DEFAULT_VERSION)]
     version: u8,
-    /// Capacity of the bloom filter
+    /// Capacity of the bloom filter. This value is ignored if
+    /// the filter is created from a dataset.
     #[clap(short, long, default_value = "10000")]
     capacity: usize,
     /// False positive rate
@@ -63,25 +74,20 @@ struct Create {
     #[clap(short = 'O', long = "opt-lvl", default_value_t = 0)]
     optimize: u8,
     /// File to store the bloom filter
-    file: Option<String>,
+    file: PathBuf,
+    /// Fills the filter with the dataset. Each file must contains
+    /// an entry per line.
+    dataset: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
 struct Insert {
-    /// Show progress information
-    #[clap(short, long)]
-    progress: bool,
     /// Reads input from stdin
     #[clap(long)]
     stdin: bool,
     /// Force data insertion, eventually breaking bloom filter FP rate
     #[clap(long)]
     force: bool,
-    /// The number of jobs to use to insert into the bloom filter. The original
-    /// filter is copied into the memory of each job so you can expect the memory
-    /// of the whole process to be N times the size of the (uncompressed) bloom filter.
-    #[clap(short, long, default_value = "2")]
-    jobs: usize,
     /// File containing the bloom filter to update
     file: String,
     /// Input files containing one entry per line, if no files is specified
@@ -97,9 +103,6 @@ struct Check {
     /// do not print anything to stdout
     #[clap(long)]
     silent: bool,
-    /// Numbers of parallel jobs to check bloom filter
-    #[clap(short, long, default_value = "2")]
-    jobs: usize,
     /// Only show entries not in the bloom filter
     #[clap(long)]
     verify: bool,
@@ -171,79 +174,118 @@ fn show_bf_properties(b: &BloomFilter) {
     );
 }
 
+fn count_lines<P: AsRef<Path>>(files: &[P]) -> usize {
+    files
+        .iter()
+        .map(|f| {
+            let of = File::open(f).unwrap();
+            io::BufReader::new(of).lines().count()
+        })
+        .sum()
+}
+
+fn parallel_insert(
+    bf: BloomFilter,
+    files: Vec<String>,
+    jobs: usize,
+    verbose: bool,
+) -> Result<BloomFilter, anyhow::Error> {
+    let arc_bf = Arc::new(std::sync::Mutex::new(bf));
+    let mut handles = vec![];
+
+    let batches = files.chunks(max(files.len() / jobs, 1));
+
+    for batch in batches {
+        let shared = Arc::clone(&arc_bf);
+        let batch: Vec<String> = batch.to_vec();
+        let mut copy = shared
+            .lock()
+            .map_err(|e| anyhow!("failed to lock mutex: {}", e))?
+            .clone();
+
+        let h = thread::spawn(move || {
+            for input in batch {
+                if verbose {
+                    eprintln!("processing file: {input}");
+                }
+                let in_file = std::fs::File::open(&input)?;
+
+                for line in std::io::BufReader::new(in_file).lines() {
+                    let line = line?;
+                    copy.insert_bytes(&line)?;
+                }
+            }
+
+            let mut shared = shared
+                .lock()
+                .map_err(|e| anyhow!("failed to lock mutex: {}", e))?;
+            shared.union_merge(&copy)?;
+
+            Ok::<(), anyhow::Error>(())
+        });
+        handles.push(h)
+    }
+
+    for h in handles {
+        h.join().expect("failed to join thread")?;
+    }
+
+    let out = arc_bf.lock().expect("failed to lock mutex").clone();
+
+    Ok(out)
+}
+
 fn main() -> Result<(), anyhow::Error> {
-    let sub = Args::parse();
+    let args = Args::parse();
 
-    match sub.command {
+    match args.command {
         Command::Create(o) => {
-            let mut f = File::create(o.file.expect("missing destination file"))?;
+            // if the output file exists, we check it is a valid bloom filter file
+            // this prevents writting an unwanted file from the dataset if we forget
+            // cli argument
+            if o.file.exists() {
+                BloomFilter::from_reader(File::open(&o.file)?)
+                    .map_err(|_| anyhow!("output file exists but it is not a valid poppy file"))?;
+            }
 
+            let capacity = match o.dataset.len() {
+                0 => o.capacity,
+                _ => {
+                    if args.verbose {
+                        eprintln!("counting lines in dataset")
+                    }
+                    count_lines(&o.dataset)
+                }
+            };
+
+            // we create bloom filter
             let b = {
-                let p = Params::new(o.capacity, o.probability)
+                let p = Params::new(capacity, o.probability)
                     .version(o.version)
                     .opt(OptLevel::try_from(o.optimize)?);
                 BloomFilter::try_from(p)?
             };
 
-            b.write(&mut f)?;
+            // we insert and save
+            let bf = parallel_insert(b, o.dataset, args.jobs, args.verbose)?;
+            let mut f = File::create(o.file)?;
+            bf.write(&mut f)?;
         }
         Command::Insert(o) => {
             let bloom_file = File::open(&o.file)?;
-            let bf = Arc::new(std::sync::Mutex::new(BloomFilter::from_reader(bloom_file)?));
+            let mut bf = BloomFilter::from_reader(bloom_file)?;
 
             // if we pipe in entries via stdin
             if o.stdin || o.inputs.is_empty() {
-                let mut bf = bf.lock().unwrap();
                 for line in std::io::BufReader::new(io::stdin()).lines() {
                     bf.insert_bytes(line?)?;
                 }
             }
 
-            // processing files if any
-            if !o.inputs.is_empty() {
-                let mut handles = vec![];
-                let files = o.inputs.clone();
-
-                let batches = files.chunks(max(files.len() / o.jobs, 1));
-
-                for batch in batches {
-                    let shared = Arc::clone(&bf);
-                    let batch: Vec<String> = batch.to_vec();
-                    let mut copy = shared
-                        .lock()
-                        .map_err(|e| anyhow!("failed to lock mutex: {}", e))?
-                        .clone();
-
-                    let h = thread::spawn(move || {
-                        for input in batch {
-                            if o.progress {
-                                println!("processing file: {input}");
-                            }
-                            let in_file = std::fs::File::open(&input)?;
-
-                            for line in std::io::BufReader::new(in_file).lines() {
-                                let line = line?;
-                                copy.insert_bytes(&line)?;
-                            }
-                        }
-
-                        let mut shared = shared
-                            .lock()
-                            .map_err(|e| anyhow!("failed to lock mutex: {}", e))?;
-                        shared.union_merge(&copy)?;
-
-                        Ok::<(), anyhow::Error>(())
-                    });
-                    handles.push(h)
-                }
-
-                for h in handles {
-                    h.join().expect("failed to join thread")?;
-                }
-            }
-
+            // we insert and save
+            let bf = parallel_insert(bf, o.inputs, args.jobs, args.verbose)?;
             let mut output = File::create(o.file)?;
-            bf.lock().unwrap().write(&mut output)?;
+            bf.write(&mut output)?;
         }
 
         Command::Check(o) => {
@@ -279,7 +321,7 @@ fn main() -> Result<(), anyhow::Error> {
                 let mut handles = vec![];
                 let files = o.inputs.clone();
 
-                let batches = files.chunks(max(files.len() / o.jobs, 1));
+                let batches = files.chunks(max(files.len() / args.jobs, 1));
 
                 for batch in batches {
                     let shared = Arc::clone(&bf);
