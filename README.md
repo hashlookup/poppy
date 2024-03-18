@@ -46,53 +46,31 @@ python -c "import poppy; help(poppy)"
 # CLI Usage
 
 ```
-Usage: poppy <COMMAND>
+Usage: poppy [OPTIONS] <COMMAND>
 
 Commands:
   create  Create a new bloom filter
   insert  Insert data into an existing bloom filter
   check   Checks entries against an existing bloom filter
+  bench   Benchmark the bloom filter. If the bloom filter behaves in an unexpected way, the benchmark fails. Input data is read from stdin
   show    Show information about an existing bloom filter
   help    Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help  Print help
+  -v, --verbose      Verbose output
+  -j, --jobs <JOBS>  The number of jobs to use when parallelization is possible. For write operations the original filter is copied into the memory of each job so you can expect the memory of the whole process to be N times the size of the filter [default: 2]
+  -h, --help         Print help
 ```
 
-## Difference with Go and C CLI
+## Easy filter creation
 
-This implementation allows to **insert** and **check** entries in the bloom
-filter in a multi-threaded fashion. You can specify a number of **jobs** to run
-in parallel either with **insert** or **check** commands. It is worth noting that
-this parallelization works only if several files are specified in the command line,
-as parallelization occurs at a file level.
-
-### Multi-threaded insertion VS single-threaded insertion
-
-Trying to make a bulk insert with **poppy** in a single thread can be achieved by simply
-piping entries to insert.
+One can easily create filter directly from a bunch of data. In this case the filter capacity will
+be set to the number of entries in the dataset.
 
 ```
-Command being timed: "bash -c cat src/data/all-hashes/*.txt | /tmp/poppy insert /tmp/hashlookup.bloom"
-User time (seconds): 226.76
-System time (seconds): 18.11
-Percent of CPU this job got: 105%
-Elapsed (wall clock) time (h:mm:ss or m:ss): 3:52.75
-...
-Page size (bytes): 4096
-Exit status: 0
-```
-
-If one wants to achieve parallelization and expect some improvements in term of speed it is possible by providing
-both a number of jobs (here 8) and a list of files containing entries to insert.
-```
-Command being timed: "bash -c /tmp/poppy insert -j 8 /tmp/hashlookup.bloom src/data/all-hashes/*.txt"
-User time (seconds): 467.73
-System time (seconds): 8.96
-Percent of CPU this job got: 743%
-Elapsed (wall clock) time (h:mm:ss or m:ss): 1:04.12
-...
-Exit status: 0
+# this creates a new filter saved in filter.pop with all entries (one per line)
+# found in .txt files under the dataset directory
+poppy create -v -j 8 create -p 0.001 /path/to/output/filter.pop /path/to/dataset/*.txt
 ```
 
 # Funding
