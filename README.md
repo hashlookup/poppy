@@ -23,6 +23,26 @@ rustup target add x86_64-unknown-linux-musl
 cargo build --release --target=x86_64-unknown-linux-musl --bins
 ```
 
+# Python Bindings
+
+Poppy comes with Python bindings, using the great [PyO3 crate](https://github.com/PyO3/pyo3).
+
+## Testing the bindings from git
+
+The following example assumes you are using `virtualenvwrapper`, it is trivial to adapt to make
+it work with your preferred python virtual environment.
+
+```bash
+mkvirtualenv poppy
+git clone https://github.com/hashlookup/poppy
+cd poppy/poppy-py
+# install maturin (tool shipped with PyO3)
+pip install maturin
+# installs current bindings into the current virtual env
+maturin develop --release
+python -c "import poppy; help(poppy)"
+```
+
 # CLI Usage
 
 ```
