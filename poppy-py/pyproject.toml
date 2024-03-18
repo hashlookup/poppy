@@ -11,5 +11,10 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
+authors = [{ name = "Quentin JEROME", email = "quentin.jerome@circl.lu" }]
+maintainers = [{ name = "Quentin JEROME", email = "quentin.jerome@circl.lu" }]
+description = "Python bindings for poppy Rust library"
+[project.urls]
+Repository = "https://github.com/hashlookup/poppy"
 [tool.maturin]
 features = ["pyo3/extension-module"]
