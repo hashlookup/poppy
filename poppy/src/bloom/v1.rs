@@ -394,7 +394,6 @@ mod test {
         collections::HashSet,
         fs,
         io::{self, BufRead},
-        path::PathBuf,
     };
 
     use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -402,13 +401,6 @@ mod test {
     use crate::utils::{time_it, ByteSize, Stats};
 
     use super::*;
-
-    macro_rules! current_dir {
-        () => {{
-            let file = PathBuf::from(file!());
-            PathBuf::from(file.parent().unwrap())
-        }};
-    }
 
     macro_rules! bloom {
         ($cap:expr, $proba:expr) => {
@@ -567,7 +559,8 @@ mod test {
     fn benchmark_bloom() {
         let mut rng: StdRng = SeedableRng::from_seed([42; 32]);
 
-        let test_files = vec![current_dir!().join("data/sample.txt")];
+        let root = std::env::current_dir().unwrap();
+        let test_files = vec![root.join("src/data/sample.txt")];
 
         let mut lines = HashSet::new();
         let mut dataset_size = 0;

@@ -60,6 +60,7 @@ impl PoppyHasher for Fnv1Hasher {}
 mod test {
     use std::{
         collections::HashSet,
+        fs,
         io::{self, BufRead},
     };
 
@@ -87,8 +88,8 @@ mod test {
     #[test]
     #[ignore]
     fn test_fnv_collisions() {
-        let data = include_bytes!("../data/sample.txt");
-        let reader = io::BufReader::new(io::Cursor::new(data));
+        let data_file = std::env::current_dir().unwrap().join("src/data/sample.txt");
+        let reader = io::BufReader::new(fs::File::open(data_file).unwrap());
         let lines: HashSet<String> = reader
             .lines()
             .map_while(Result::ok)
