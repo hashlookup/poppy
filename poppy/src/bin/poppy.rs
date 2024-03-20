@@ -27,9 +27,11 @@ pub struct Args {
     /// Verbose output
     #[clap(short, long)]
     verbose: bool,
-    /// The number of jobs to use when parallelization is possible. For write operations
-    /// the original filter is copied into the memory of each job so you can expect
-    /// the memory of the whole process to be N times the size of the filter.
+    /// The number of jobs to use when parallelization is possible. Set
+    /// to 0 to take the optimal number of jobs (may be the amount of CPUs).
+    /// For write operations the original filter is copied into the memory
+    /// of each job so you can expect the memory of the whole process to
+    /// be N times the size of the filter.
     #[clap(short, long, default_value = "2")]
     jobs: usize,
     /// Poppy commands
@@ -57,7 +59,7 @@ enum Command {
 struct Create {
     /// Creates a specific version of Bloom Filter
     /// Set to 1 if cross-compatibility with other DCSO libraries
-    #[clap(short,long, default_value_t=DEFAULT_VERSION)]
+    #[clap(long, default_value_t=DEFAULT_VERSION)]
     version: u8,
     /// Capacity of the bloom filter. This value is ignored if
     /// the filter is created from a dataset.
@@ -174,14 +176,44 @@ fn show_bf_properties(b: &BloomFilter) {
     );
 }
 
-fn count_lines<P: AsRef<Path>>(files: &[P]) -> usize {
-    files
-        .iter()
-        .map(|f| {
-            let of = File::open(f).unwrap();
-            io::BufReader::new(of).lines().count()
-        })
-        .sum()
+#[inline(always)]
+fn optimal_jobs(jobs: usize) -> usize {
+    match jobs {
+        0 => thread::available_parallelism()
+            .map(|j| j.get())
+            .unwrap_or(1),
+        _ => jobs,
+    }
+}
+
+fn count_lines_parallel<P: AsRef<Path> + Clone>(
+    files: &[P],
+    jobs: usize,
+) -> Result<usize, anyhow::Error> {
+    let jobs = optimal_jobs(jobs);
+    let mut count = 0usize;
+
+    let batches = files.chunks(max(files.len() / jobs, 1));
+    let mut handles = vec![];
+
+    for batch in batches {
+        let batch: Vec<PathBuf> = batch.iter().map(|p| p.as_ref().to_path_buf()).collect();
+
+        handles.push(thread::spawn(move || {
+            let mut count = 0usize;
+            for f in batch {
+                let of = File::open(f)?;
+                count += io::BufReader::new(of).lines().count();
+            }
+            Ok::<_, anyhow::Error>(count)
+        }));
+    }
+
+    for h in handles {
+        count += h.join().expect("failed to join thread")?;
+    }
+
+    Ok(count)
 }
 
 fn parallel_insert(
@@ -192,6 +224,7 @@ fn parallel_insert(
 ) -> Result<BloomFilter, anyhow::Error> {
     let arc_bf = Arc::new(std::sync::Mutex::new(bf));
     let mut handles = vec![];
+    let jobs = optimal_jobs(jobs);
 
     let batches = files.chunks(max(files.len() / jobs, 1));
 
@@ -241,8 +274,8 @@ fn main() -> Result<(), anyhow::Error> {
     match args.command {
         Command::Create(o) => {
             // if the output file exists, we check it is a valid bloom filter file
-            // this prevents writting an unwanted file from the dataset if we forget
-            // cli argument
+            // this prevents writting an unwanted file from the dataset if we forgot
+            // one cli argument
             if o.file.exists() {
                 BloomFilter::from_reader(File::open(&o.file)?)
                     .map_err(|_| anyhow!("output file exists but it is not a valid poppy file"))?;
@@ -254,7 +287,7 @@ fn main() -> Result<(), anyhow::Error> {
                     if args.verbose {
                         eprintln!("counting lines in dataset")
                     }
-                    count_lines(&o.dataset)
+                    count_lines_parallel(&o.dataset, args.jobs)?
                 }
             };
 
