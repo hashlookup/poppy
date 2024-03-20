@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use poppy::Params;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 
 #[pyclass]
@@ -58,7 +59,19 @@ impl BloomFilter {
         ))
     }
 
-    /// Insert a bytes into the filter
+    #[staticmethod]
+    /// Creates a new filter with given parameters
+    fn with_params(version: u8, capacity: usize, fpp: f64, opt: u8) -> PyResult<Self> {
+        let p = Params::new(capacity, fpp).version(version).opt(
+            opt.try_into()
+                .map_err(poppy::Error::from)
+                .map_err(Error::from)?,
+        );
+
+        Ok(Self(p.try_into().map_err(Error::from)?))
+    }
+
+    /// Insert bytes into the filter
     pub fn insert_bytes(&mut self, data: &[u8]) -> PyResult<bool> {
         Ok(self.0.insert_bytes(data).map_err(Error::from)?)
     }
@@ -132,7 +145,7 @@ impl BloomFilter {
     }
 }
 
-/// A Python module implemented in Rust.
+/// Python bindings to Poppy bloom filter library (written in Rust)
 #[pymodule]
 #[pyo3(name = "poppy")]
 fn poppy_py(_py: Python, m: &PyModule) -> PyResult<()> {
