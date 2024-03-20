@@ -55,8 +55,8 @@ be set to the number of entries in the dataset.
 
 ```
 # this creates a new filter saved in filter.pop with all entries (one per line)
-# found in .txt files under the dataset directory
-poppy create -v -j 8 create -p 0.001 /path/to/output/filter.pop /path/to/dataset/*.txt
+# found in .txt files under the dataset directory using available CPUs (-j 0)
+poppy -j 0 create -p 0.001 /path/to/output/filter.pop /path/to/dataset/*.txt
 ```
 
 # Funding
