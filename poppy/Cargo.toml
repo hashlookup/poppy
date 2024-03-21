@@ -13,6 +13,7 @@ jemallocator = "0.5.4"
 thiserror = "1.0.57"
 rand = "0.8.5"
 wyhash = "0.5.0"
+statrs = "0.16.0"
 
 [dev-dependencies]
 md-5 = "0.10.6"

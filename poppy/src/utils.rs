@@ -1,3 +1,4 @@
+use statrs::statistics::Statistics;
 use std::{
     fmt::Display,
     hash::Hash,
@@ -129,19 +130,30 @@ impl ByteSize {
     }
 }
 
-pub fn time_it<F: FnMut()>(mut f: F, run: u32) -> Duration {
-    let start_time = std::time::Instant::now();
+#[inline(always)]
+pub fn benchmark<F: FnMut()>(mut f: F, run: u32) -> Duration {
     let it = run;
+    let mut times = Vec::with_capacity(run as usize);
     for _ in 0..it {
+        let start_time = std::time::Instant::now();
         f();
+        let end_time = std::time::Instant::now();
+        times.push((end_time - start_time).as_secs_f64())
     }
-    let end_time = std::time::Instant::now();
-    // return average iteration time
-    (end_time - start_time) / it
+    // Calculate the mean and standard deviation of the data
+    let mean = times.as_slice().mean();
+    let std_dev = times.as_slice().std_dev();
+
+    // Define the threshold for outliers (e.g., 3 standard deviations from the mean)
+    let threshold = 3.0 * std_dev;
+
+    // Remove elements that are outside the threshold
+    times.retain(|&x| (x - mean).abs() <= threshold);
+    Duration::from_secs_f64(times.mean())
 }
 
 pub fn time_it_once<F: FnMut()>(f: F) -> Duration {
-    time_it(f, 1)
+    benchmark(f, 1)
 }
 
 #[inline(always)]

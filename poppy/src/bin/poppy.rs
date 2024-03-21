@@ -11,10 +11,11 @@ use std::{
 use anyhow::anyhow;
 use clap::Parser;
 use poppy::{
-    utils::{time_it, time_it_once, ByteSize, Stats},
+    utils::{benchmark, time_it_once, ByteSize, Stats},
     BloomFilter, OptLevel, Params, DEFAULT_VERSION,
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use statrs::statistics::Statistics;
 
 // When built with musl, the allocator slows down a lot insertion
 // so we have to use jemalloc to get back to the expected performance
@@ -126,7 +127,7 @@ struct Benchmark {
     #[clap(long)]
     test_size: Option<usize>,
     /// Number of runs to compute statistics
-    #[clap(short, long, default_value_t = 5)]
+    #[clap(short, long, default_value_t = 50)]
     runs: u32,
     /// Allowed tolerance (in percentage) on false positive proba before raising error
     #[clap(short, long, default_value_t = 0.2)]
@@ -397,7 +398,8 @@ fn main() -> Result<(), anyhow::Error> {
         }
         Command::Bench(o) => {
             let mut rng: StdRng = SeedableRng::from_seed([42; 32]);
-            let mut entries = HashSet::new();
+            let mut entries = vec![];
+            let mut marked = HashSet::new();
             let mut dataset_size = 0usize;
             let mut queries_per_seconds = vec![];
             let limit = match o.size_mb {
@@ -405,16 +407,19 @@ fn main() -> Result<(), anyhow::Error> {
                 _ => ByteSize::from_mb(o.size_mb),
             };
 
+            println!("Preparing dataset");
             for line in io::stdin().lines() {
                 let line = line?;
+                let h = wyhash::wyhash(line.as_bytes(), 42);
 
                 if ByteSize::from_bytes(dataset_size) > limit {
                     break;
                 }
 
-                if !entries.contains(&line) {
+                if !marked.contains(&h) {
                     dataset_size += line.as_bytes().len();
-                    entries.insert(line);
+                    marked.insert(h);
+                    entries.push(line);
                 }
             }
 
@@ -444,7 +449,7 @@ fn main() -> Result<(), anyhow::Error> {
 
             show_bf_properties(&b);
 
-            let test_size = o.test_size.unwrap_or(entries.len());
+            let test_len = o.test_size.unwrap_or(entries.len());
 
             println!("\nQuery performance:");
             println!(
@@ -452,14 +457,17 @@ fn main() -> Result<(), anyhow::Error> {
                 ByteSize::from_bytes(dataset_size),
                 ByteSize::from_bytes(dataset_size).in_mb().round()
             );
-            println!("\ttest size: {test_size}");
+            println!("\ttest size: {test_len}");
             println!();
+
+            // shuffling entry dataset
+            entries.shuffle(&mut rng);
 
             let mut fpps = vec![];
             for mut_prob in (10..=100).step_by(10) {
                 let mut tmp = entries
                     .iter()
-                    .take(test_size)
+                    .take(test_len)
                     .cloned()
                     .collect::<Vec<String>>();
 
@@ -478,20 +486,26 @@ fn main() -> Result<(), anyhow::Error> {
                     .collect::<Vec<(bool, String)>>();
 
                 let mut stats = Stats::new();
-                let test_size = mutated_lines.iter().map(|(_m, l)| l.len()).sum();
+                let test_size_bytes = mutated_lines.iter().map(|(_m, l)| l.len()).sum();
 
-                let query_dur = time_it(
+                // we compute real fpp (no need to benchmark this)
+                mutated_lines.iter().for_each(|(m, l)| {
+                    let is_in_bf = b.contains_bytes(l);
+                    // data has been mutated
+                    if *m {
+                        if is_in_bf {
+                            stats.inc_fp()
+                        } else {
+                            stats.inc_tn()
+                        }
+                    }
+                });
+
+                // we compute query duration
+                let query_dur = benchmark(
                     || {
-                        mutated_lines.iter().for_each(|(m, l)| {
-                            let is_in_bf = b.contains_bytes(l);
-                            // data has been mutated
-                            if *m {
-                                if is_in_bf {
-                                    stats.inc_fp()
-                                } else {
-                                    stats.inc_tn()
-                                }
-                            }
+                        mutated_lines.iter().for_each(|(_, l)| {
+                            b.contains_bytes(l);
                         })
                     },
                     o.runs,
@@ -506,7 +520,7 @@ fn main() -> Result<(), anyhow::Error> {
                 println!(
                     "\tquery speed: {:.1} queries/s -> {:.1} MB/s",
                     qps,
-                    ByteSize::from_bytes(test_size).in_mb() / query_dur.as_secs_f64()
+                    ByteSize::from_bytes(test_size_bytes).in_mb() / query_dur.as_secs_f64()
                 );
                 println!("\tfp rate = {:3}", stats.fp_rate());
                 println!();
@@ -514,7 +528,8 @@ fn main() -> Result<(), anyhow::Error> {
                 fpps.push(stats.fp_rate());
                 queries_per_seconds.push(qps);
             }
-            let avg_fpp: f64 = fpps.iter().sum::<f64>() / (fpps.len() as f64);
+
+            let avg_fpp: f64 = fpps.mean();
 
             if !avg_fpp.is_nan() && avg_fpp > b.fpp() + b.fpp() * o.fp_tol {
                 return Err(anyhow!(
@@ -524,9 +539,7 @@ fn main() -> Result<(), anyhow::Error> {
                 ));
             }
 
-            let avg_qps = (queries_per_seconds.iter().sum::<f64>()
-                / queries_per_seconds.len() as f64)
-                .round();
+            let avg_qps = queries_per_seconds.mean().round();
             println!("Average queries per seconds: {avg_qps}")
         }
         Command::Show(o) => {

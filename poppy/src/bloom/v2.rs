@@ -505,7 +505,7 @@ mod test {
     use crate::{
         estimate_p,
         hash::PoppyHasher,
-        utils::{time_it, ByteSize, Stats},
+        utils::{benchmark, ByteSize, Stats},
     };
 
     use super::*;
@@ -863,7 +863,7 @@ mod test {
         let mb_size = dataset_size as f64 / 1_048_576.0;
         let runs = 5;
 
-        let insert_dur = time_it(
+        let insert_dur = benchmark(
             || {
                 lines.iter().for_each(|l| {
                     b.insert_bytes(l).unwrap();
@@ -916,7 +916,7 @@ mod test {
                 .collect::<Vec<(bool, String)>>();
 
             let mut s = Stats::new();
-            let query_dur = time_it(
+            let query_dur = benchmark(
                 || {
                     mutated_lines.iter().for_each(|(m, l)| {
                         let is_in_bf = b.contains_bytes(l);

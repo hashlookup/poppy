@@ -398,7 +398,7 @@ mod test {
 
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
-    use crate::utils::{time_it, ByteSize, Stats};
+    use crate::utils::{benchmark, ByteSize, Stats};
 
     use super::*;
 
@@ -587,7 +587,7 @@ mod test {
         let mb_size = dataset_size as f64 / 1_048_576.0;
         let runs = 5;
 
-        let insert_dur = time_it(
+        let insert_dur = benchmark(
             || {
                 lines.iter().for_each(|l| {
                     b.insert_bytes(l).unwrap();
@@ -638,7 +638,7 @@ mod test {
 
             let mut fp_count = 0usize;
             let mut tn_count = 0usize;
-            let query_dur = time_it(
+            let query_dur = benchmark(
                 || {
                     mutated_lines.iter().for_each(|(m, l)| {
                         let is_in_bf = b.contains_bytes(l);
