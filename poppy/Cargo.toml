@@ -27,3 +27,4 @@ sha2 = "0.10.8"
 [[bin]]
 name = "poppy"
 path = "src/bin/poppy.rs"
+doc = false

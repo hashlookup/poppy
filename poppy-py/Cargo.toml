@@ -15,6 +15,7 @@ publish = false
 [lib]
 name = "poppy"
 crate-type = ["cdylib"]
+doc = false
 
 [dependencies]
 poppy = { path = "../poppy", package = "poppy-filters" }
