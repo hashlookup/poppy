@@ -140,6 +140,11 @@ pub fn benchmark<F: FnMut()>(mut f: F, run: u32) -> Duration {
         let end_time = std::time::Instant::now();
         times.push((end_time - start_time).as_secs_f64())
     }
+
+    if run == 1 {
+        return Duration::from_secs_f64(times[0]);
+    }
+
     // Calculate the mean and standard deviation of the data
     let mean = times.as_slice().mean();
     let std_dev = times.as_slice().std_dev();
