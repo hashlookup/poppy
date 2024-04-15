@@ -111,15 +111,34 @@ pub enum Error {
     TooManyEntries,
 }
 
+/// Structure used for easy filter creation from a set
+/// of parameters
+///
+/// # Example
+///
+/// ```
+/// use poppy_filters::Params;
+///
+/// let p = Params::new(1000, 0.1);
+/// // will create a V2 version of BloomFilter from
+/// // parameters
+/// let bf = p.into_v2();
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Params {
+    /// version of the filter
     pub version: u8,
+    /// capacity of the filter
     pub capacity: usize,
+    /// false positive probability
     pub fpp: f64,
+    /// optimization level
     pub opt: OptLevel,
 }
 
 impl Params {
+    /// Creates new parameters given a filter capacity and
+    /// false positive probability (fpp)
     pub fn new(capacity: usize, fpp: f64) -> Self {
         Params {
             version: DEFAULT_VERSION,
@@ -129,20 +148,24 @@ impl Params {
         }
     }
 
+    /// Sets the version of the filter we want to create
     pub fn version(mut self, version: u8) -> Self {
         self.version = version;
         self
     }
 
+    /// Sets the optimization level of the filter
     pub fn opt(mut self, opt: OptLevel) -> Self {
         self.opt = opt;
         self
     }
 
+    /// Turn Params into [v1::BloomFilter]
     pub fn into_v1(self) -> v1::BloomFilter {
         self.into()
     }
 
+    /// Turn Params into [v2::BloomFilter]
     pub fn into_v2(self) -> v2::BloomFilter {
         self.into()
     }
@@ -156,41 +179,63 @@ impl TryFrom<Params> for BloomFilter {
 }
 
 #[derive(Debug, Clone)]
+/// Common BloomFilter implementation supporting both
+/// [v1::BloomFilter] and [v2::BloomFilter].
+///
+/// # Example
+///
+/// ```
+/// use poppy_filters::BloomFilter;
+///
+/// let mut bf = BloomFilter::with_capacity(1042, 0.1);
+///
+/// bf.insert(42);
+/// assert!(bf.contains(42));
+///
+/// bf.insert_bytes("toto");
+/// assert!(bf.contains_bytes(String::from("toto")));
+/// ```
 pub enum BloomFilter {
     V1(v1::BloomFilter),
     V2(v2::BloomFilter),
 }
 
 impl BloomFilter {
+    /// Creates a new filter given the settings passed as parameters
     pub fn with_version_capacity_opt(
-        v: u8,
+        version: u8,
         cap: usize,
-        proba: f64,
+        fpp: f64,
         opt: OptLevel,
     ) -> Result<Self, Error> {
-        match v {
-            1 => Ok(Self::V1(v1::BloomFilter::with_capacity(cap as u64, proba))),
-            2 => Ok(Self::V2(v2::BloomFilter::make(cap as u64, proba, opt))),
-            _ => Err(Error::InvalidVersion(v)),
+        match version {
+            1 => Ok(Self::V1(v1::BloomFilter::with_capacity(cap as u64, fpp))),
+            2 => Ok(Self::V2(v2::BloomFilter::make(cap as u64, fpp, opt))),
+            _ => Err(Error::InvalidVersion(version)),
         }
     }
 
-    pub fn with_version_capacity(v: u8, cap: usize, proba: f64) -> Result<Self, Error> {
-        Self::with_version_capacity_opt(v, cap, proba, OptLevel::None)
+    /// Creates a new filter given a version, capacity and false positive probability (fpp)
+    pub fn with_version_capacity(version: u8, cap: usize, fpp: f64) -> Result<Self, Error> {
+        Self::with_version_capacity_opt(version, cap, fpp, OptLevel::None)
     }
 
-    pub fn with_capacity(cap: usize, proba: f64) -> Self {
-        Self::V2(v2::BloomFilter::with_capacity(cap as u64, proba))
+    /// Creates a new filter with a given capacity and false positive probability (fpp)
+    pub fn with_capacity(cap: usize, fpp: f64) -> Self {
+        Self::V2(v2::BloomFilter::with_capacity(cap as u64, fpp))
     }
 
+    /// Fill a bloom filter with several entries
     pub fn fill<S: AsRef<[u8]>>(&mut self, dataset: Vec<S>) -> Result<(), Error> {
         for entry in dataset {
-            // cannot panic as we built the filter to be able to hold all dataset
             self.insert_bytes(entry)?;
         }
         Ok(())
     }
 
+    /// Creates a BloomFilter from a reader. The data read is supposed
+    /// to be in the appropriate format, if not the function returns an
+    /// Err.
     pub fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
         let mut r = io::BufReader::new(r);
 
@@ -203,6 +248,7 @@ impl BloomFilter {
         }
     }
 
+    /// Insert data inside the filter. An error is returned if insertion failed.
     #[inline]
     pub fn insert_bytes<D: AsRef<[u8]>>(&mut self, data: D) -> Result<bool, Error> {
         match self {
@@ -211,6 +257,7 @@ impl BloomFilter {
         }
     }
 
+    /// Insert an element implementing [Sized]. An error is returned if insertion failed.
     #[inline]
     pub fn insert<S: Sized>(&mut self, value: S) -> Result<bool, Error> {
         self.insert_bytes(unsafe {
@@ -218,6 +265,7 @@ impl BloomFilter {
         })
     }
 
+    /// Returns true if bytes are contained in the filter.
     #[inline]
     pub fn contains_bytes<D: AsRef<[u8]>>(&self, data: D) -> bool {
         match self {
@@ -226,6 +274,7 @@ impl BloomFilter {
         }
     }
 
+    /// Returns true if element implementing [Sized] is in the filter.
     #[inline]
     pub fn contains<S: Sized>(&mut self, value: S) -> bool {
         self.contains_bytes(unsafe {
@@ -233,6 +282,7 @@ impl BloomFilter {
         })
     }
 
+    /// Write the filter into a writer implementing [Write]
     #[inline]
     pub fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
         match self {
@@ -241,6 +291,7 @@ impl BloomFilter {
         }
     }
 
+    /// Returns the version of the filter
     #[inline(always)]
     pub const fn version(&self) -> u8 {
         match self {
@@ -249,6 +300,7 @@ impl BloomFilter {
         }
     }
 
+    /// Returns true if the current filter and other have the same parameters
     #[inline]
     pub fn has_same_params(&self, other: &Self) -> bool {
         if self.version() != other.version() {
@@ -262,6 +314,8 @@ impl BloomFilter {
         }
     }
 
+    /// Merge current filter with another one. The result of the union is
+    /// the current filter.
     #[inline]
     pub fn union_merge(&mut self, other: &Self) -> Result<(), Error> {
         if !self.has_same_params(other) {
@@ -293,6 +347,8 @@ impl BloomFilter {
         }
     }
 
+    /// Returns the capacity of the filter
+    #[inline(always)]
     pub fn capacity(&self) -> usize {
         match self {
             Self::V1(b) => b.capacity as usize,
@@ -300,7 +356,7 @@ impl BloomFilter {
         }
     }
 
-    /// clears all bits (set to 0) of the filter
+    /// Clears all bits (set to 0) of the filter
     pub fn clear(&mut self) {
         match self {
             Self::V1(b) => b.clear(),
@@ -308,7 +364,8 @@ impl BloomFilter {
         }
     }
 
-    /// false positive probability of the bloom filter
+    /// Returns the false positive probability of the filter
+    #[inline(always)]
     pub fn fpp(&self) -> f64 {
         match self {
             Self::V1(b) => b.fpp,
@@ -316,6 +373,8 @@ impl BloomFilter {
         }
     }
 
+    /// Return the size in bytes of the filter
+    #[inline(always)]
     pub fn size_in_bytes(&self) -> usize {
         match self {
             Self::V1(b) => b.size_in_bytes(),
@@ -323,6 +382,8 @@ impl BloomFilter {
         }
     }
 
+    /// Returns the estimated count of element inserted into the  filter
+    #[inline(always)]
     pub fn count_estimate(&self) -> u64 {
         match self {
             Self::V1(b) => b.count_estimate(),
@@ -330,6 +391,8 @@ impl BloomFilter {
         }
     }
 
+    /// Returns the blob of data joined to the filter
+    #[inline(always)]
     pub fn data(&self) -> &[u8] {
         match self {
             Self::V1(b) => b.data.as_slice(),
@@ -341,7 +404,7 @@ impl BloomFilter {
 /// macro to ease bloom filter creation
 /// # Example
 /// ```
-/// use poppy::bloom;
+/// use poppy_filters::bloom;
 ///
 /// let mut b = bloom!(100, 0.1);
 /// b.insert("hello");
@@ -350,7 +413,7 @@ impl BloomFilter {
 ///
 /// # Other Example
 /// ```
-/// use poppy::bloom;
+/// use poppy_filters::bloom;
 ///
 /// let mut b = bloom!(100, 0.1, ["hello", "world"]);
 /// assert!(b.contains_bytes("hello"));
