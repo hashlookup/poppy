@@ -1,6 +1,9 @@
 # poppy
 
+[![Crates.io Version](https://img.shields.io/crates/v/poppy-filters?style=for-the-badge)](https://crates.io/crates/poppy-filters)
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/hashlookup/poppy/rust.yml?style=for-the-badge)](https://github.com/hashlookup/poppy/actions)
+[![docs.rs](https://img.shields.io/docsrs/poppy-filters?style=for-the-badge&logo=docs.rs&color=blue)](https://docs.rs/poppy-filters)
+
 
 **Poppy** is a Rust crate offering an efficient implementation of [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter). It also includes a **command-line
 utility** (also called poppy) allowing users to effortlessly create filters with their desired capacity and false positive probability.
