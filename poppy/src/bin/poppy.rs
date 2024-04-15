@@ -14,6 +14,7 @@ use poppy::{
     utils::{benchmark, time_it_once, ByteSize, Stats},
     BloomFilter, OptLevel, Params, DEFAULT_VERSION,
 };
+use poppy_filters as poppy;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use statrs::statistics::Statistics;
 
