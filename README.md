@@ -1,4 +1,4 @@
-# poppy
+![Logo](./assets/logo.svg)
 
 [![Crates.io Version](https://img.shields.io/crates/v/poppy-filters?style=for-the-badge)](https://crates.io/crates/poppy-filters)
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/hashlookup/poppy/rust.yml?style=for-the-badge)](https://github.com/hashlookup/poppy/actions)
