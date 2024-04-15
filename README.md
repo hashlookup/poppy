@@ -45,7 +45,15 @@ Poppy comes with Python bindings, using the great [PyO3 crate](https://github.co
 
 Please take a look at [Poppy Bindings](./poppy-py) for further details.
 
-## CLI Usage
+## Command Line Interface
+
+### Installation
+
+In order to install `poppy` **command line utility**, one has to run the following command: `cargo install poppy-filters`
+
+An alternative installation is by cloning this repository and compile from source using `cargo`.
+
+### Usage
 
 ```
 Usage: poppy [OPTIONS] <COMMAND>
@@ -64,15 +72,79 @@ Options:
   -h, --help         Print help
 ```
 
-### Easy filter creation
+Every command has its own arguments and help information. For example to get `create` command help run: `poppy create help`.
+
+### Examples
+
+#### Creating an empty Bloom filter
+
+```bash
+# creating a filter with a desired capacity `-c` and false positive probability `-p`
+poppy create -c 1000 -p 0.001 /path/to/output/filter.pop
+
+# showing information about the filter we just created
+poppy show /path/to/output/filter.pop
+```
+
+#### Inserting data into the filter
+
+One can insert data in the filter in two ways, **either** by reading from **stdin** or by **files**.
+Reading data from stdin cannot be parallelized, so if one wants to insert a lot of data in the 
+filter and speed up insertion, one has to insert from files (and setting the number of CPUs to use
+with `-j` option).
+
+```bash
+# insertion from stdin
+cat data-1.txt data-2.txt | poppy insert filter.pop
+# we verify number of element in the filter
+poppy show filter.pop
+
+# insertion from files
+poppy insert filter.pop data-1.txt data-2.txt
+# we verify number of element in the filter
+poppy show filter.pop
+
+# insertion from several files in parallel
+poppy -j 0 insert filter.pop data-1.txt data-2.txt
+```
+
+#### Creating and Inserting in one command
 
 One can easily create filter directly from a bunch of data. In this case the filter capacity will
 be set to the number of entries in the dataset.
 
-```
+```bash
 # this creates a new filter saved in filter.pop with all entries (one per line)
 # found in .txt files under the dataset directory using available CPUs (-j 0)
 poppy -j 0 create -p 0.001 /path/to/output/filter.pop /path/to/dataset/*.txt
+```
+
+#### Checking if some data is in the filter
+
+Check operation comes in the same variant as insertion, either from **stdin** or from **files**
+(when one need to take advantage of parallelization). By default, when an entry **is inside** the 
+filter **it is going to be printed out to stdout**.
+
+```bash
+# check from stdin
+cat data-1.txt data-2.txt | poppy check filter.pop
+
+# check from files
+poppy check filter.pop data-1.txt data-2.txt
+
+# check from several files in parallel
+poppy -j 0 check filter.pop data-1.txt data-2.txt
+```
+
+#### Benchmarking filter
+
+Benchmarking a filter is an important step as it allow you to make sure that what you get is what
+you expected, in terms of false positive probability. The benchmark needs to take data already 
+inserted in the filter, it will then randomly mutate entries and check them against the filter.
+
+```bash
+# run a benchmark against data known to be in the filter
+cat data-1.txt data-2.txt | poppy bench filter.pop
 ```
 
 ## Funding
