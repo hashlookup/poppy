@@ -721,7 +721,14 @@ mod test {
     }
 
     #[test]
+    #[allow(unreachable_code)]
     fn test_fpps() {
+        #[cfg(debug_assertions)]
+        {
+            println!("test is ignored because it takes too long in debug");
+            return;
+        }
+
         let tol = 0.2;
         let root = std::env::current_dir().unwrap();
         let test_files = vec![
