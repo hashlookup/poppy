@@ -156,11 +156,6 @@ pub fn time_it_once<F: FnMut()>(f: F) -> Duration {
     benchmark(f, 1)
 }
 
-#[inline(always)]
-pub fn is_power_of_2(n: u64) -> bool {
-    n != 0 && (n & (n - 1)) == 0
-}
-
 #[derive(Debug, Default)]
 pub struct Stats {
     fp: f64,

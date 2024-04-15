@@ -1,4 +1,5 @@
-// N gives the size in Bytes of the bucket
+/// Array based bitset implementation.
+/// N gives the size in Bytes of the bucket
 #[derive(Debug, Clone)]
 pub struct BitSet<const N: usize>([u8; N]);
 
