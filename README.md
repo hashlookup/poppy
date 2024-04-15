@@ -17,8 +17,9 @@ Poppy **ensures cross-compatibility with** the bloom filter format used by [DCSO
 
 It depends what you want to achieve. If you want to be cross compatible with DCSO tools and library, you must absolutely choose DCSO format. In any other scenario
 we advice to use Poppy format (the default), as it is more robust, faster and provides room for customization. A comparison between the two formats and implementations can be found
-[in this blog post](https://www.misp-project.org/2024/03/25/Poppy-a-new-bloom-filter-format-and-project.html/)
-
+[in this blog post](https://www.misp-project.org/2024/03/25/Poppy-a-new-bloom-filter-format-and-project.html/). By default, **library and CLI** chooses **poppy** format. If one wants
+to select **DCSO format** when creating a filter **from CLI**, one has to use `poppy create --version 1`.
+ 
 ### How to build the project ?
 
 #### Regular building
