@@ -86,12 +86,9 @@ struct Create {
 
 #[derive(Debug, Parser)]
 struct Insert {
-    /// Reads input from stdin
+    /// Reads input from stdin (useful when poppy also insert from files)
     #[clap(long)]
     stdin: bool,
-    /// Force data insertion, eventually breaking bloom filter FP rate
-    #[clap(long)]
-    force: bool,
     /// File containing the bloom filter to update
     file: String,
     /// Input files containing one entry per line, if no files is specified
