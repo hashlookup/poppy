@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["poppy", "poppy-py"]
+members = ["poppy", "python"]
 
 [workspace.package]
 license = "BSD-3-Clause"
