@@ -10,10 +10,12 @@ repository.workspace = true
 license.workspace = true
 readme.workspace = true
 
+[target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies]
+jemallocator = "0.5.4"
+
 [dependencies]
 anyhow = "1.0.79"
 clap = { version = "4.5.0", features = ["derive"] }
-jemallocator = "0.5.4"
 thiserror = "1.0.57"
 rand = "0.8.5"
 wyhash = "0.5.0"
