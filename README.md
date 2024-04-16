@@ -43,7 +43,7 @@ cargo build --release --target=x86_64-unknown-linux-musl --bins
 
 Poppy comes with Python bindings, using the great [PyO3 crate](https://github.com/PyO3/pyo3).
 
-Please take a look at [Poppy Bindings](./poppy-py) for further details.
+Please take a look at [Poppy Bindings](./python) for further details.
 
 ## Command Line Interface
 
