@@ -1,7 +1,6 @@
 use std::{
     hash::Hasher,
     io::{self, BufWriter, Read, Write},
-    slice,
 };
 
 use crate::{
@@ -221,13 +220,6 @@ impl BloomFilter {
             .collect::<Vec<bool>>()
     }
 
-    #[inline(always)]
-    pub fn insert<S: Sized>(&mut self, value: S) -> Result<bool, Error> {
-        self.insert_bytes(unsafe {
-            slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
-        })
-    }
-
     /// inserts a value into the bloom filter, as bloom filters are not easily
     /// growable an error is returned if we try to insert too many entries
     #[inline(always)]
@@ -292,13 +284,6 @@ impl BloomFilter {
             }
         }
         ret
-    }
-
-    #[inline(always)]
-    pub fn contains<S: Sized>(&self, value: S) -> bool {
-        self.contains_bytes(unsafe {
-            slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
-        })
     }
 
     /// counts all the set bits in the bloom filter
@@ -544,13 +529,13 @@ mod test {
         assert!(b.bit_size.is_power_of_two());
 
         for i in 0..n {
-            b.insert(i).unwrap();
-            assert!(b.contains(i));
+            b.insert_bytes(i.to_le_bytes()).unwrap();
+            assert!(b.contains_bytes(i.to_le_bytes()));
         }
 
         let mut s = Stats::new();
         for i in n..n * 2 {
-            if b.contains(i) {
+            if b.contains_bytes(i.to_le_bytes()) {
                 s.inc_fp()
             } else {
                 s.inc_tn()
@@ -564,7 +549,7 @@ mod test {
     #[test]
     fn test_contains_on_empty() {
         let b = bloom!(0, 0.001);
-        assert!(!b.contains(42))
+        assert!(!b.contains_bytes("42"))
     }
 
     #[test]

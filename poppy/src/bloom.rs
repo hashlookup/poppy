@@ -1,4 +1,4 @@
-use core::slice;
+
 
 use std::io::{self, Read, Write};
 use thiserror::Error;
@@ -257,14 +257,6 @@ impl BloomFilter {
         }
     }
 
-    /// Insert an element implementing [Sized]. An error is returned if insertion failed.
-    #[inline]
-    pub fn insert<S: Sized>(&mut self, value: S) -> Result<bool, Error> {
-        self.insert_bytes(unsafe {
-            slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
-        })
-    }
-
     /// Returns true if bytes are contained in the filter.
     #[inline]
     pub fn contains_bytes<D: AsRef<[u8]>>(&self, data: D) -> bool {
@@ -272,14 +264,6 @@ impl BloomFilter {
             Self::V1(b) => b.contains_bytes(data),
             Self::V2(b) => b.contains_bytes(data),
         }
-    }
-
-    /// Returns true if element implementing [Sized] is in the filter.
-    #[inline]
-    pub fn contains<S: Sized>(&self, value: S) -> bool {
-        self.contains_bytes(unsafe {
-            slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
-        })
     }
 
     /// Write the filter into a writer implementing [Write]
@@ -455,8 +439,8 @@ mod test {
     fn test_is_full() {
         let mut b = bloom!(10, 0.001);
         assert!(!b.is_full());
-        (0..10).for_each(|i| {
-            b.insert(i).unwrap();
+        (0..10i32).for_each(|i| {
+            b.insert_bytes(i.to_le_bytes()).unwrap();
         });
         assert!(b.is_full())
     }

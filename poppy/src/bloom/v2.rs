@@ -2,7 +2,6 @@ use std::{
     hash::Hasher,
     io::{self, BufWriter, Read, Write},
     marker::PhantomData,
-    slice,
 };
 
 use crate::{
@@ -331,13 +330,6 @@ impl BloomFilter {
         Ok(new)
     }
 
-    #[inline(always)]
-    pub fn insert<S: Sized>(&mut self, value: S) -> Result<bool, Error> {
-        self.insert_bytes(unsafe {
-            slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
-        })
-    }
-
     #[inline]
     pub fn contains_bytes<D: AsRef<[u8]>>(&self, data: D) -> bool {
         if self.capacity == 0 {
@@ -376,13 +368,6 @@ impl BloomFilter {
         }
 
         true
-    }
-
-    #[inline(always)]
-    pub fn contains<S: Sized>(&self, value: S) -> bool {
-        self.contains_bytes(unsafe {
-            slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
-        })
     }
 
     /// counts all the set bits in the bloom filter
@@ -852,7 +837,7 @@ mod test {
     #[test]
     fn test_contains_on_empty() {
         let b = bloom!(0, 0.001);
-        assert!(!b.contains(42))
+        assert!(!b.contains_bytes("toto"))
     }
 
     #[test]
