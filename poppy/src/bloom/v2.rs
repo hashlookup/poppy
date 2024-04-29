@@ -286,6 +286,10 @@ impl BloomFilter {
 
     #[inline]
     pub fn insert_bytes<D: AsRef<[u8]>>(&mut self, data: D) -> Result<bool, Error> {
+        if self.capacity == 0 {
+            return Err(Error::TooManyEntries);
+        }
+
         let mut new = false;
         let it = self.index_iter().init_with_data(data);
 
@@ -336,6 +340,10 @@ impl BloomFilter {
 
     #[inline]
     pub fn contains_bytes<D: AsRef<[u8]>>(&self, data: D) -> bool {
+        if self.capacity == 0 {
+            return false;
+        }
+
         let it = self.index_iter().init_with_data(data);
 
         let h = it.bucket_hash();
@@ -371,7 +379,7 @@ impl BloomFilter {
     }
 
     #[inline(always)]
-    pub fn contains<S: Sized>(&mut self, value: S) -> bool {
+    pub fn contains<S: Sized>(&self, value: S) -> bool {
         self.contains_bytes(unsafe {
             slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
         })
@@ -839,6 +847,12 @@ mod test {
         assert_eq!(b.data, data);
         // last element must be 255
         assert_eq!(b.data.last().unwrap(), &255);
+    }
+
+    #[test]
+    fn test_contains_on_empty() {
+        let b = bloom!(0, 0.001);
+        assert!(!b.contains(42))
     }
 
     #[test]

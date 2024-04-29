@@ -234,6 +234,10 @@ impl BloomFilter {
     pub fn insert_bytes<S: AsRef<[u8]>>(&mut self, value: S) -> Result<bool, Error> {
         let mut new = false;
 
+        if self.capacity == 0 {
+            return Err(Error::TooManyEntries);
+        }
+
         for index in self.fingerprint.fingerprint(value) {
             let iblock = index / 64;
             let ibit = index % 64;
@@ -279,16 +283,19 @@ impl BloomFilter {
     /// checks if an entry is contained in the bloom filter
     #[inline(always)]
     pub fn contains_bytes<S: AsRef<[u8]>>(&self, value: S) -> bool {
+        let mut ret = false;
         for index in self.fingerprint.fingerprint(value) {
-            if !self.get_nth_bit(index) {
+            ret |= self.get_nth_bit(index);
+            // if one bit is missing we early return
+            if !ret {
                 return false;
             }
         }
-        true
+        ret
     }
 
     #[inline(always)]
-    pub fn contains<S: Sized>(&mut self, value: S) -> bool {
+    pub fn contains<S: Sized>(&self, value: S) -> bool {
         self.contains_bytes(unsafe {
             slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
         })
@@ -552,6 +559,12 @@ mod test {
 
         assert!(s.fp_rate() > fpp + fpp * tolerance);
         println!("real fp rate = {} VS expected={fpp}", s.fp_rate());
+    }
+
+    #[test]
+    fn test_contains_on_empty() {
+        let b = bloom!(0, 0.001);
+        assert!(!b.contains(42))
     }
 
     #[test]

@@ -276,7 +276,7 @@ impl BloomFilter {
 
     /// Returns true if element implementing [Sized] is in the filter.
     #[inline]
-    pub fn contains<S: Sized>(&mut self, value: S) -> bool {
+    pub fn contains<S: Sized>(&self, value: S) -> bool {
         self.contains_bytes(unsafe {
             slice::from_raw_parts(&value as *const S as *const u8, core::mem::size_of::<S>())
         })
