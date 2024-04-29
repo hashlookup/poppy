@@ -91,6 +91,11 @@ impl BloomFilter {
         self.0.contains_bytes(s)
     }
 
+    /// Returns true if filter is full
+    pub fn is_full(&self) -> bool {
+        self.0.is_full()
+    }
+
     /// Merge two filters, doing the union of them this methods does an
     /// in-place merging into the current filter
     pub fn union_merge(&mut self, o: &Self) -> PyResult<()> {
