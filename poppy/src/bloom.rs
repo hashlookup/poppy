@@ -391,6 +391,11 @@ impl BloomFilter {
         }
     }
 
+    /// Returns true if the filter is full
+    pub fn is_full(&self) -> bool {
+        self.count_estimate() as usize == self.capacity()
+    }
+
     /// Returns the blob of data joined to the filter
     #[inline(always)]
     pub fn data(&self) -> &[u8] {
@@ -444,5 +449,15 @@ mod test {
         assert_eq!(OptLevel::try_from(1u8).unwrap(), OptLevel::Space);
         assert_eq!(OptLevel::try_from(2u8).unwrap(), OptLevel::Speed);
         assert_eq!(OptLevel::try_from(3u8).unwrap(), OptLevel::Best);
+    }
+
+    #[test]
+    fn test_is_full() {
+        let mut b = bloom!(10, 0.001);
+        assert!(!b.is_full());
+        (0..10).for_each(|i| {
+            b.insert(i).unwrap();
+        });
+        assert!(b.is_full())
     }
 }
