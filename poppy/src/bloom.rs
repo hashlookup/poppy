@@ -1,5 +1,3 @@
-
-
 use std::io::{self, Read, Write};
 use thiserror::Error;
 
@@ -188,9 +186,6 @@ impl TryFrom<Params> for BloomFilter {
 /// use poppy_filters::BloomFilter;
 ///
 /// let mut bf = BloomFilter::with_capacity(1042, 0.1);
-///
-/// bf.insert(42);
-/// assert!(bf.contains(42));
 ///
 /// bf.insert_bytes("toto");
 /// assert!(bf.contains_bytes(String::from("toto")));
@@ -396,8 +391,8 @@ impl BloomFilter {
 /// use poppy_filters::bloom;
 ///
 /// let mut b = bloom!(100, 0.1);
-/// b.insert("hello");
-/// assert!(b.contains("hello"));
+/// b.insert_bytes("hello");
+/// assert!(b.contains_bytes("hello"));
 /// ```
 ///
 /// # Other Example
