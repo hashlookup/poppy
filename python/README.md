@@ -1,3 +1,5 @@
+[![PyPI - Version](https://img.shields.io/pypi/v/poppy-py?style=for-the-badge)](https://pypi.org/project/poppy-py/)
+
 This is a package providing python bindings for [poppy](https://github.com/hashlookup/poppy), a bloom filter library written in Rust.
 
 # Installation from git
