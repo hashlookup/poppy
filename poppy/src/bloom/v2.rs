@@ -206,7 +206,7 @@ impl BloomFilter {
     }
 
     #[inline]
-    pub(crate) fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
+    pub fn write<W: Write>(&self, w: &mut W) -> Result<(), Error> {
         let mut w = BufWriter::new(w);
 
         // writting version
