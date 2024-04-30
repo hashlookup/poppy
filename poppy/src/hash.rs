@@ -13,6 +13,24 @@ pub trait PoppyHasher: Hasher + Default {
     }
 }
 
+/// Trait to implement for custom types to be inserted into filters
+///
+/// # Example
+///
+/// ```
+/// use poppy_filters::PoppyHash;
+///
+/// #[derive(Hash)]
+/// struct MyStruct {
+///     some_int: i64,
+///     s: String,
+/// }
+///
+/// // PoppyHash can simply be implemented like this
+/// // for any structure also implementing Hash trait
+/// impl PoppyHash for MyStruct {};
+///
+/// ```
 pub trait PoppyHash: Hash {
     fn hash_pop<H: PoppyHasher>(&self) -> u64 {
         let mut hasher = H::default();
