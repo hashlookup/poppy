@@ -332,8 +332,8 @@ impl BloomFilter {
     #[inline(always)]
     pub fn capacity(&self) -> usize {
         match self {
-            Self::V1(b) => b.capacity as usize,
-            Self::V2(b) => b.capacity as usize,
+            Self::V1(b) => b.capacity(),
+            Self::V2(b) => b.capacity(),
         }
     }
 
@@ -349,8 +349,8 @@ impl BloomFilter {
     #[inline(always)]
     pub fn fpp(&self) -> f64 {
         match self {
-            Self::V1(b) => b.fpp,
-            Self::V2(b) => b.fpp,
+            Self::V1(b) => b.fpp(),
+            Self::V2(b) => b.fpp(),
         }
     }
 
@@ -374,7 +374,10 @@ impl BloomFilter {
 
     /// Returns true if the filter is full
     pub fn is_full(&self) -> bool {
-        self.count_estimate() as usize == self.capacity()
+        match self {
+            Self::V1(b) => b.is_full(),
+            Self::V2(b) => b.is_full(),
+        }
     }
 
     /// Returns the blob of data joined to the filter

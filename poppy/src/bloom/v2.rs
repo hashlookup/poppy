@@ -468,6 +468,22 @@ impl BloomFilter {
         self.buckets.len() * Bucket::byte_size() + self.index_cache.byte_len()
     }
 
+    #[inline(always)]
+    pub fn fpp(&self) -> f64 {
+        self.fpp
+    }
+
+    #[inline(always)]
+    pub fn capacity(&self) -> usize {
+        self.capacity as usize
+    }
+
+    #[inline(always)]
+    /// Returns true if the filter is full
+    pub fn is_full(&self) -> bool {
+        self.count_estimate() as usize == self.capacity()
+    }
+
     /// this function estimates the number of common elements between two bloom filters
     /// without having to intersect them
     pub fn count_common_entries(&self, other: &Self) -> Result<usize, Error> {

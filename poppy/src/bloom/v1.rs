@@ -329,6 +329,22 @@ impl BloomFilter {
     }
 
     #[inline(always)]
+    pub fn fpp(&self) -> f64 {
+        self.fpp
+    }
+
+    #[inline(always)]
+    pub fn capacity(&self) -> usize {
+        self.capacity as usize
+    }
+
+    #[inline(always)]
+    /// Returns true if the filter is full
+    pub fn is_full(&self) -> bool {
+        self.count_estimate() as usize == self.capacity()
+    }
+
+    #[inline(always)]
     pub fn has_same_params(&self, other: &Self) -> bool {
         self.flags == other.flags
             && self.capacity == other.capacity
