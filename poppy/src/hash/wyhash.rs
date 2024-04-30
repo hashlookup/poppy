@@ -7,6 +7,7 @@ use super::PoppyHasher;
 // poppy seed
 const SEED: u64 = 0x706f707079533d42;
 
+#[derive(Clone)]
 pub struct WyHasher {
     h: WyHash,
 }

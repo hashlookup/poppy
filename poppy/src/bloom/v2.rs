@@ -1,32 +1,28 @@
 use std::{
-    hash::Hasher,
     io::{self, BufWriter, Read, Write},
     marker::PhantomData,
 };
 
 use crate::{
     bitset::{array::BitSet, vec::VecBitSet},
-    hash::{wyhash::WyHasher, PoppyHasher},
+    hash::{digest, wyhash::WyHasher, PoppyHash, PoppyHasher},
     read_flags,
     utils::{read_le_f64, read_le_u64},
     Flags, OptLevel, Params,
 };
 use core::mem::size_of;
 
-fn digest<H: Hasher + Default, S: AsRef<[u8]>>(s: S) -> u64 {
-    let mut h = H::default();
-    h.write(s.as_ref());
-    h.finish()
-}
-
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct IndexIterator<H: PoppyHasher, const M: u64> {
+    init: bool,
     h1: u64,
     h2: u64,
     i: u64,
     count: u64,
     h: PhantomData<H>,
 }
+
+impl<H: PoppyHasher + Clone, const M: u64> std::marker::Copy for IndexIterator<H, M> {}
 
 #[inline(always)]
 fn xorshift_star(mut seed: u64) -> u64 {
@@ -52,7 +48,9 @@ impl<H: PoppyHasher, const M: u64> IndexIterator<H, M> {
     }
 
     #[inline(always)]
-    fn init_with_data<S: AsRef<[u8]>>(mut self, data: S) -> Self {
+    #[allow(dead_code)] // this method is used to check compatibility with former implementation
+    fn init_with_slice<S: AsRef<[u8]>>(mut self, data: S) -> Self {
+        self.init = true;
         if data.as_ref().len() > size_of::<u64>() {
             self.h1 = digest::<H, S>(data);
         } else {
@@ -67,6 +65,20 @@ impl<H: PoppyHasher, const M: u64> IndexIterator<H, M> {
         self.h2 = 0;
         self.i = 0;
         self
+    }
+
+    #[inline(always)]
+    fn init_with_hashable<D: PoppyHash>(mut self, data: D) -> Self {
+        self.init = true;
+        self.h1 = data.hash_pop::<H>();
+        self.h2 = 0;
+        self.i = 0;
+        self
+    }
+
+    #[inline(always)]
+    const fn is_init(&self) -> bool {
+        self.init && self.i == 0
     }
 }
 
@@ -108,6 +120,8 @@ const BUCKET_SIZE: usize = 4096;
 const BIT_SET_MOD: u64 = (BUCKET_SIZE * 8) as u64;
 type Bucket = BitSet<BUCKET_SIZE>;
 
+/// Faster and more accurate implementation than [crate::v1::BloomFilter]
+/// Until further notice, this is the structure to use by default.
 #[derive(Debug, Clone)]
 pub struct BloomFilter {
     flags: Flags,
@@ -276,21 +290,26 @@ impl BloomFilter {
         self.buckets.len().is_power_of_two()
     }
 
-    /// clears out the bloom filter
+    /// Clears out the bloom filter
     #[inline(always)]
     pub fn clear(&mut self) {
         self.buckets.iter_mut().for_each(|bucket| bucket.clear());
         self.count = 0;
     }
 
-    #[inline]
-    pub fn insert_bytes<D: AsRef<[u8]>>(&mut self, data: D) -> Result<bool, Error> {
+    #[inline(always)]
+    /// Function to implement hash one insert many use cases. An [IndexIterator] can
+    /// be obtained from [Self::prep_index_iter] method.
+    pub fn insert_iter(&mut self, it: IndexIterator<WyHasher, BIT_SET_MOD>) -> Result<bool, Error> {
+        if !it.is_init() {
+            return Err(Error::UninitIter);
+        }
+
         if self.capacity == 0 {
             return Err(Error::TooManyEntries);
         }
 
         let mut new = false;
-        let it = self.index_iter().init_with_data(data);
 
         let h = it.bucket_hash();
         let ibucket = {
@@ -331,12 +350,51 @@ impl BloomFilter {
     }
 
     #[inline]
-    pub fn contains_bytes<D: AsRef<[u8]>>(&self, data: D) -> bool {
-        if self.capacity == 0 {
-            return false;
+    fn _insert_bytes_old<D: AsRef<[u8]>>(&mut self, data: D) -> Result<bool, Error> {
+        self.insert_iter(self.index_iter().init_with_slice(data))
+    }
+
+    #[inline]
+    /// Insert a byte slice into the filter. This function is kept to support backward
+    /// compatibility with old API.
+    pub fn insert_bytes<D: AsRef<[u8]>>(&mut self, data: D) -> Result<bool, Error> {
+        self.insert(data.as_ref())
+    }
+
+    #[inline]
+    /// Generic insert any data implementing [PoppyHash] trait
+    pub fn insert<H: PoppyHash>(&mut self, data: H) -> Result<bool, Error> {
+        self.insert_iter(self.prep_index_iter(data))
+    }
+
+    #[inline]
+    /// Function to implement hash one contains many use cases. An [IndexIterator] can
+    /// be obtained from [Self::prep_index_iter] method.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use poppy_filters::v2::BloomFilter;
+    ///
+    /// let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001);
+    ///
+    /// /// we prepare the data to be inserted and/or checked
+    /// /// this way, the cost of hashing the data is done only once
+    /// let prep = (0..1000).map(|d| b.prep_index_iter(d)).collect::<Vec<_>>();
+    ///
+    /// for p in prep {
+    ///     b.insert_iter(p).unwrap();
+    ///     b.contains_iter(p).unwrap();
+    /// }
+    /// ```
+    pub fn contains_iter(&self, it: IndexIterator<WyHasher, BIT_SET_MOD>) -> Result<bool, Error> {
+        if !it.is_init() {
+            return Err(Error::UninitIter);
         }
 
-        let it = self.index_iter().init_with_data(data);
+        if self.capacity == 0 {
+            return Ok(false);
+        }
 
         let h = it.bucket_hash();
 
@@ -345,7 +403,7 @@ impl BloomFilter {
                 .index_cache
                 .get_nth_bit(h as usize & (self.index_cache.bit_len() - 1))
         {
-            return false;
+            return Ok(false);
         }
 
         let ibucket = {
@@ -363,11 +421,34 @@ impl BloomFilter {
 
         for ibit in it {
             if !bucket.get_nth_bit(ibit as usize) {
-                return false;
+                return Ok(false);
             }
         }
 
-        true
+        Ok(true)
+    }
+
+    #[inline]
+    fn _contains_bytes_old<D: AsRef<[u8]>>(&self, data: D) -> bool {
+        let it = self.index_iter().init_with_slice(data);
+        // this cannot panic as our iterator has been inititialized
+        self.contains_iter(it).unwrap()
+    }
+
+    #[inline]
+    pub fn contains_bytes<S: AsRef<[u8]>>(&self, data: S) -> bool {
+        self.contains(data.as_ref())
+    }
+
+    #[inline]
+    pub fn contains<H: PoppyHash>(&self, data: H) -> bool {
+        // this cannot panic as our iterator has been inititialized
+        self.contains_iter(self.prep_index_iter(data)).unwrap()
+    }
+
+    #[inline]
+    pub fn prep_index_iter<H: PoppyHash>(&self, data: H) -> IndexIterator<WyHasher, BIT_SET_MOD> {
+        self.index_iter().init_with_hashable(data)
     }
 
     /// counts all the set bits in the bloom filter
@@ -528,7 +609,7 @@ mod test {
         ($cap:expr, $proba:expr, [$($values:literal),*]) => {
             {
                 let mut b=bloom!($cap, $proba);
-                $(b.insert_bytes($values).unwrap();)*
+                $(b.insert($values).unwrap();)*
                 b
             }
         };
@@ -587,11 +668,44 @@ mod test {
     #[test]
     fn test_bloom() {
         let mut b = BloomFilter::with_capacity(10000, 0.001);
-        assert!(!b.contains_bytes("value"));
-        b.insert_bytes("value").unwrap();
-        assert!(b.contains_bytes("value"));
+        assert!(!b._contains_bytes_old("hello"));
+        b.insert_bytes("hello").unwrap();
+        assert!(b._contains_bytes_old("hello"));
+        assert!(b.contains("hello"));
+        assert!(b.contains_bytes("hello"));
         assert_eq!(b.count, 1);
-        assert!(!b.contains_bytes("unknown"));
+        assert!(!b.contains("unknown"));
+    }
+
+    #[test]
+    fn test_poppy_hash_compatibility() {
+        let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001);
+        assert!(!b.contains("hello"));
+        b.insert("hello").unwrap();
+        b.insert(String::from("some string")).unwrap();
+        b._insert_bytes_old("some old string").unwrap();
+
+        assert!(b._contains_bytes_old("hello"));
+        assert!(b._contains_bytes_old("some string"));
+        assert!(b._contains_bytes_old("some old string"));
+
+        assert!(b.contains("hello"));
+        assert!(b.contains("some string"));
+        assert!(b.contains("some old string"));
+
+        assert!(!b.contains("unknown"));
+    }
+
+    #[test]
+    fn test_insert_contains_by_iter() {
+        let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001);
+
+        let prep = (0..1000).map(|d| b.prep_index_iter(d)).collect::<Vec<_>>();
+
+        for p in prep {
+            b.insert_iter(p).unwrap();
+            b.contains_iter(p).unwrap();
+        }
     }
 
     #[test]

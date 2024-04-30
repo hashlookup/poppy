@@ -66,6 +66,11 @@ impl Iterator for Fingerprint {
 }
 type Error = crate::Error;
 
+/// This structure implements a bloom filter compatible with
+/// [DSCO implementation](https://github.com/DCSO/bloom). It must
+/// be use for compatibility purposes only. Its use is deprecated
+/// as its fpp is not guaranteed to be correct. Use [crate::v2::BloomFilter]
+/// instead.
 #[derive(Debug, Clone)]
 pub struct BloomFilter {
     flags: Flags,
