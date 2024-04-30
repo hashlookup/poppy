@@ -107,6 +107,8 @@ pub enum Error {
     OptLevel(#[from] OptLevelError),
     #[error("too many entries, false positive rate cannot be met")]
     TooManyEntries,
+    #[error("entry index iterator must be initialized")]
+    UninitIter,
 }
 
 /// Structure used for easy filter creation from a set
