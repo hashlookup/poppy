@@ -239,8 +239,8 @@ fn parallel_insert(
 
     let batches = files.chunks(max(files.len() / jobs, 1));
 
-    // if only one job or only one batch we don't need to duplicate filter
-    if jobs == 1 || batches.len() == 1 {
+    // if only one batch we don't need to duplicate filter
+    if batches.len() == 1 {
         for batch in batches {
             for input in batch {
                 process_file(&mut bf, input, verbose)?;
