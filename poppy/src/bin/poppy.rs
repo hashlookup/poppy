@@ -215,17 +215,42 @@ fn count_lines_parallel<P: AsRef<Path> + Clone>(
     Ok(count)
 }
 
+fn process_file(bf: &mut BloomFilter, input: &String, verbose: bool) -> Result<(), anyhow::Error> {
+    if verbose {
+        eprintln!("processing file: {input}");
+    }
+    let in_file = std::fs::File::open(input)?;
+
+    for line in std::io::BufReader::new(in_file).lines() {
+        let line = line?;
+        bf.insert_bytes(&line)?;
+    }
+
+    Ok(())
+}
+
 fn parallel_insert(
-    bf: BloomFilter,
+    mut bf: BloomFilter,
     files: Vec<String>,
     jobs: usize,
     verbose: bool,
 ) -> Result<BloomFilter, anyhow::Error> {
-    let arc_bf = Arc::new(std::sync::Mutex::new(bf));
-    let mut handles = vec![];
     let jobs = optimal_jobs(jobs);
 
     let batches = files.chunks(max(files.len() / jobs, 1));
+
+    // if only one job or only one batch we don't need to duplicate filter
+    if jobs == 1 || batches.len() == 1 {
+        for batch in batches {
+            for input in batch {
+                process_file(&mut bf, input, verbose)?;
+            }
+        }
+        return Ok(bf);
+    }
+
+    let arc_bf = Arc::new(std::sync::Mutex::new(bf));
+    let mut handles = vec![];
 
     for batch in batches {
         let shared = Arc::clone(&arc_bf);
@@ -237,15 +262,7 @@ fn parallel_insert(
 
         let h = thread::spawn(move || {
             for input in batch {
-                if verbose {
-                    eprintln!("processing file: {input}");
-                }
-                let in_file = std::fs::File::open(&input)?;
-
-                for line in std::io::BufReader::new(in_file).lines() {
-                    let line = line?;
-                    copy.insert_bytes(&line)?;
-                }
+                process_file(&mut copy, &input, verbose)?;
             }
 
             let mut shared = shared
