@@ -7,7 +7,6 @@ authors = ["quentin.jerome@circl.lu"]
 rust-version = "1.74.1"
 repository.workspace = true
 license.workspace = true
-readme = "README.md"
 # there is no need to publish this crate as 
 # it aims at being used with python
 publish = false
