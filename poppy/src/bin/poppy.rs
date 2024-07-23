@@ -230,7 +230,7 @@ fn process_file(bf: &mut BloomFilter, input: &String, verbose: bool) -> Result<(
 }
 
 fn parallel_insert(
-    mut bf: BloomFilter,
+    bf: BloomFilter,
     files: Vec<String>,
     jobs: usize,
     verbose: bool,
@@ -238,48 +238,41 @@ fn parallel_insert(
     let jobs = optimal_jobs(jobs);
 
     let batches = files.chunks(max(files.len() / jobs, 1));
-
-    // if only one batch we don't need to duplicate filter
-    if batches.len() == 1 {
-        for batch in batches {
-            for input in batch {
-                process_file(&mut bf, input, verbose)?;
-            }
-        }
-        return Ok(bf);
+    let mut bfs = vec![];
+    for _ in 0..(batches.len() - 1) {
+        bfs.push(bf.clone())
     }
+    // we move bf to prevent doing an additional copy
+    bfs.push(bf);
 
-    let arc_bf = Arc::new(std::sync::Mutex::new(bf));
     let mut handles = vec![];
 
+    // map processing
     for batch in batches {
-        let shared = Arc::clone(&arc_bf);
         let batch: Vec<String> = batch.to_vec();
-        let mut copy = shared
-            .lock()
-            .map_err(|e| anyhow!("failed to lock mutex: {}", e))?
-            .clone();
+        let mut copy = bfs.pop().unwrap();
 
         let h = thread::spawn(move || {
             for input in batch {
                 process_file(&mut copy, &input, verbose)?;
             }
 
-            let mut shared = shared
-                .lock()
-                .map_err(|e| anyhow!("failed to lock mutex: {}", e))?;
-            shared.union_merge(&copy)?;
-
-            Ok::<(), anyhow::Error>(())
+            Ok::<_, anyhow::Error>(copy)
         });
         handles.push(h)
     }
 
-    for h in handles {
-        h.join().expect("failed to join thread")?;
-    }
+    // reduce
+    let mut bfs = handles
+        .into_iter()
+        .map(|h| h.join().expect("failed to join thread").unwrap())
+        .collect::<Vec<BloomFilter>>();
 
-    let out = arc_bf.lock().expect("failed to lock mutex").clone();
+    // code should never panic here
+    let mut out = bfs.pop().expect("bpfs must always have one item");
+    while let Some(bf) = bfs.pop() {
+        out.union_merge(&bf)?;
+    }
 
     Ok(out)
 }
