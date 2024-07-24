@@ -45,8 +45,10 @@ pub fn load(path: PathBuf) -> PyResult<BloomFilter> {
 impl BloomFilter {
     #[new]
     /// Creates a new filter with the given capacity and false positive probability
-    fn new(capacity: usize, fpp: f64) -> Self {
-        Self(poppy::BloomFilter::with_capacity(capacity, fpp))
+    fn new(capacity: usize, fpp: f64) -> PyResult<Self> {
+        Ok(Self(
+            poppy::BloomFilter::with_capacity(capacity, fpp).map_err(Error::from)?,
+        ))
     }
 
     #[staticmethod]

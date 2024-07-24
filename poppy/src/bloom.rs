@@ -97,6 +97,8 @@ impl TryFrom<u8> for OptLevel {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("fpp value must be in ]0;1] fpp={0}")]
+    WrongFpp(f64),
     #[error("{0}")]
     IoError(#[from] io::Error),
     #[error("invalid version {0}")]
@@ -122,7 +124,7 @@ pub enum Error {
 /// let p = Params::new(1000, 0.1);
 /// // will create a V2 version of BloomFilter from
 /// // parameters
-/// let bf = p.into_v2();
+/// let bf = p.try_into_v2().unwrap();
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Params {
@@ -161,13 +163,13 @@ impl Params {
     }
 
     /// Turn Params into [v1::BloomFilter]
-    pub fn into_v1(self) -> v1::BloomFilter {
-        self.into()
+    pub fn try_into_v1(self) -> Result<v1::BloomFilter, Error> {
+        self.try_into()
     }
 
     /// Turn Params into [v2::BloomFilter]
-    pub fn into_v2(self) -> v2::BloomFilter {
-        self.into()
+    pub fn try_into_v2(self) -> Result<v2::BloomFilter, Error> {
+        self.try_into()
     }
 }
 
@@ -187,7 +189,7 @@ impl TryFrom<Params> for BloomFilter {
 /// ```
 /// use poppy_filters::BloomFilter;
 ///
-/// let mut bf = BloomFilter::with_capacity(1042, 0.1);
+/// let mut bf = BloomFilter::with_capacity(1042, 0.1).unwrap();
 ///
 /// bf.insert_bytes("toto");
 /// assert!(bf.contains_bytes(String::from("toto")));
@@ -206,8 +208,8 @@ impl BloomFilter {
         opt: OptLevel,
     ) -> Result<Self, Error> {
         match version {
-            1 => Ok(Self::V1(v1::BloomFilter::with_capacity(cap as u64, fpp))),
-            2 => Ok(Self::V2(v2::BloomFilter::make(cap as u64, fpp, opt))),
+            1 => Ok(Self::V1(v1::BloomFilter::with_capacity(cap as u64, fpp)?)),
+            2 => Ok(Self::V2(v2::BloomFilter::make(cap as u64, fpp, opt)?)),
             _ => Err(Error::InvalidVersion(version)),
         }
     }
@@ -218,8 +220,8 @@ impl BloomFilter {
     }
 
     /// Creates a new filter with a given capacity and false positive probability (fpp)
-    pub fn with_capacity(cap: usize, fpp: f64) -> Self {
-        Self::V2(v2::BloomFilter::with_capacity(cap as u64, fpp))
+    pub fn with_capacity(cap: usize, fpp: f64) -> Result<Self, Error> {
+        Ok(Self::V2(v2::BloomFilter::with_capacity(cap as u64, fpp)?))
     }
 
     /// Fill a bloom filter with several entries
@@ -390,7 +392,16 @@ impl BloomFilter {
     }
 }
 
-/// macro to ease bloom filter creation
+/// Macro to ease bloom filter creation
+///
+/// # Panic
+///
+/// This macro might generate code which panics
+/// either at filter creation or at element insertion.
+/// The code may panic if false positive probability is
+/// not in the expected range ]0;1] or if capacity element
+/// insertion cannot happen because the filter is full.
+///
 /// # Example
 /// ```
 /// use poppy_filters::bloom;
@@ -411,7 +422,7 @@ impl BloomFilter {
 #[macro_export]
 macro_rules! bloom {
         ($cap:expr, $proba:expr) => {
-            $crate::BloomFilter::with_capacity($cap, $proba)
+            $crate::BloomFilter::with_capacity($cap, $proba).unwrap()
         };
 
         ($cap:expr, $proba:expr, [$($values:literal),*]) => {

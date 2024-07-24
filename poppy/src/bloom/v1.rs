@@ -91,33 +91,40 @@ pub struct BloomFilter {
     fingerprint: Fingerprint,
 }
 
-impl From<Params> for BloomFilter {
-    fn from(p: Params) -> Self {
+impl TryFrom<Params> for BloomFilter {
+    type Error = Error;
+    fn try_from(p: Params) -> Result<Self, Error> {
         Self::with_capacity(p.capacity as u64, p.fpp)
     }
 }
 
 impl BloomFilter {
-    pub fn with_capacity(cap: u64, proba: f64) -> Self {
+    /// Creates a new [BloomFilter] with a given capacity and false positive
+    /// probability `fpp`.
+    pub fn with_capacity(cap: u64, fpp: f64) -> Result<Self, Error> {
+        if !(f64::MIN_POSITIVE..=1.0).contains(&fpp) {
+            return Err(Error::WrongFpp(fpp));
+        }
+
         // size in bits, computed from the capacity we want and the probability
-        let bit_size = utils::bit_size(cap, proba);
+        let bit_size = utils::bit_size(cap, fpp);
 
         // size in u64
         let u64_size = f64::ceil(bit_size as f64 / 64.0) as usize;
 
         let n_hash_fn = utils::k(bit_size, cap);
 
-        Self {
+        Ok(Self {
             flags: Flags::new(1),
             bitset: vec![0; u64_size],
             capacity: cap,
-            fpp: proba,
+            fpp,
             n_hash: n_hash_fn,
             bit_size,
             count: 0,
             data: vec![],
             fingerprint: Fingerprint::new(n_hash_fn, bit_size),
-        }
+        })
     }
 
     #[inline(always)]
@@ -417,7 +424,7 @@ mod test {
 
     macro_rules! bloom {
         ($cap:expr, $proba:expr) => {
-            $crate::v1::BloomFilter::with_capacity($cap, $proba)
+            $crate::v1::BloomFilter::with_capacity($cap, $proba).unwrap()
         };
         ($cap:expr, $proba:expr, [$($values:literal),*]) => {
             {
@@ -602,7 +609,7 @@ mod test {
             .opt(crate::OptLevel::None)
             .version(1);
 
-        let mut b = p.into_v1();
+        let mut b = p.try_into_v1().unwrap();
         let mb_size = dataset_size as f64 / 1_048_576.0;
         let runs = 5;
 
