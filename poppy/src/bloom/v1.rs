@@ -148,7 +148,7 @@ impl BloomFilter {
     }
 
     #[inline]
-    pub(crate) fn _from_reader<R: Read + Seek>(r: R, header_only: bool) -> Result<Self, Error> {
+    pub(crate) fn _from_reader<R: Read + Seek>(r: R, partial: bool) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -156,14 +156,14 @@ impl BloomFilter {
         if flags.version != 1 {
             return Err(Error::InvalidVersion(flags.version));
         }
-        Self::from_reader_with_flags(r, flags, header_only)
+        Self::from_reader_with_flags(r, flags, partial)
     }
 
     #[inline]
     pub(crate) fn from_reader_with_flags<R: Read + Seek>(
         r: R,
         flags: Flags,
-        header_only: bool,
+        partial: bool,
     ) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
@@ -177,7 +177,7 @@ impl BloomFilter {
         // initializing bitset
         let u64_size = f64::ceil((bit_size as f64) / 64.0) as u64;
         let bitset = {
-            if header_only {
+            if partial {
                 r.seek_relative((u64_size * core::mem::size_of::<u64>() as u64) as i64)?;
                 vec![]
             } else {
@@ -343,12 +343,14 @@ impl BloomFilter {
 
     #[inline(always)]
     pub fn size_in_u64(&self) -> usize {
-        self.bitset.len()
+        self.bit_size as usize
     }
 
     #[inline(always)]
     pub fn size_in_bytes(&self) -> usize {
-        self.bitset.len() * core::mem::size_of::<u64>()
+        // this is computed from bit_size so that we don't
+        // rely on self.bitset which might be empty if partially read
+        self.size_in_u64() * core::mem::size_of::<u64>()
     }
 
     #[inline(always)]

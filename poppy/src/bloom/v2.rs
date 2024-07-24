@@ -4,7 +4,10 @@ use std::{
 };
 
 use crate::{
-    bitset::{array::BitSet, vec::VecBitSet},
+    bitset::{
+        array::BitSet,
+        vec::{byte_cap_from_bit_cap, VecBitSet},
+    },
     hash::{digest, wyhash::WyHasher, PoppyHash, PoppyHasher},
     read_flags,
     utils::{read_le_f64, read_le_u64},
@@ -132,6 +135,9 @@ pub struct BloomFilter {
     /// it is not used by default as it increases bloom
     /// filter size
     index_cache: VecBitSet,
+    /// these two fields are needed to store partially read filter size
+    n_buckets: u64,
+    cache_byte_size: u64,
     /// the maximum of entries the filter can contains without
     /// impacting the desired false positive probability
     pub(crate) capacity: u64,
@@ -162,7 +168,7 @@ impl BloomFilter {
     }
 
     #[inline]
-    pub(crate) fn _from_reader<R: Read + Seek>(r: R, header_only: bool) -> Result<Self, Error> {
+    pub(crate) fn _from_reader<R: Read + Seek>(r: R, partial: bool) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -172,14 +178,14 @@ impl BloomFilter {
             return Err(Error::InvalidVersion(flags.version));
         }
 
-        Self::from_reader_with_flags(r, flags, header_only)
+        Self::from_reader_with_flags(r, flags, partial)
     }
 
     #[inline]
     pub(crate) fn from_reader_with_flags<R: Read + Seek>(
         r: R,
         flags: Flags,
-        header_only: bool,
+        partial: bool,
     ) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
@@ -195,19 +201,24 @@ impl BloomFilter {
         let n_hash_buck = read_le_u64(r)?;
         let count = read_le_u64(r)?;
 
-        let cache_bit_size = read_le_u64(r)? as usize;
-        let mut index_cache = VecBitSet::with_bit_capacity(cache_bit_size);
-        if header_only {
-            r.seek_relative(index_cache.byte_len() as i64)?;
-        } else {
-            r.read_exact(index_cache.as_mut_slice())?;
-        }
+        let cache_bit_size = read_le_u64(r)?;
+        let cache_byte_size = byte_cap_from_bit_cap(cache_bit_size as usize) as u64;
+        let index_cache = {
+            if partial {
+                r.seek_relative(cache_byte_size as i64)?;
+                VecBitSet::with_bit_capacity(0)
+            } else {
+                let mut ic = VecBitSet::with_bit_capacity(cache_bit_size as usize);
+                r.read_exact(ic.as_mut_slice())?;
+                ic
+            }
+        };
 
         // we read the number of buckets
         let n_buckets = read_le_u64(r)? as usize;
 
         let buckets = {
-            if header_only {
+            if partial {
                 r.seek_relative((n_buckets * core::mem::size_of::<Bucket>()) as i64)?;
                 vec![]
             } else {
@@ -227,6 +238,8 @@ impl BloomFilter {
         Ok(Self {
             flags,
             index_cache,
+            n_buckets: n_buckets as u64,
+            cache_byte_size,
             capacity,
             fpp,
             n_hash_buck,
@@ -298,9 +311,14 @@ impl BloomFilter {
             }
         }
 
+        let index_cache = VecBitSet::with_bit_capacity(cache_bit_size as usize);
+        let cache_bit_size = index_cache.byte_len() as u64;
+
         Ok(Self {
             flags: Flags::new(2).opt(opt),
-            index_cache: VecBitSet::with_bit_capacity(cache_bit_size as usize),
+            index_cache,
+            n_buckets: n_bucket,
+            cache_byte_size: cache_bit_size,
             buckets: vec![Bucket::new(); n_bucket as usize],
             capacity,
             fpp,
@@ -514,7 +532,7 @@ impl BloomFilter {
 
     #[inline]
     pub fn size_in_bytes(&self) -> usize {
-        self.buckets.len() * Bucket::byte_size() + self.index_cache.byte_len()
+        self.n_buckets as usize * Bucket::byte_size() + self.cache_byte_size as usize
     }
 
     #[inline(always)]
@@ -1001,21 +1019,24 @@ mod test {
 
         let mut cursor = io::Cursor::new(vec![]);
         b.write(&mut cursor).unwrap();
-        println!("cursor position: {}", cursor.position());
         cursor.set_position(0);
         // deserializing the stuff out
-        let b = BloomFilter::from_reader(cursor).unwrap();
-        assert_eq!(b.fpp, 0.0001);
-        assert!(b.contains_bytes("deserialization"));
-        assert!(b.contains_bytes("test"));
-        assert!(!b.contains_bytes("hello"));
-        assert!(!b.contains_bytes("world"));
-        assert_eq!(b.data, data);
+        let new = BloomFilter::from_reader(cursor).unwrap();
+        assert_eq!(new.fpp, 0.0001);
+        assert_eq!(new.size_in_bytes(), new.size_in_bytes());
+        assert!(new.contains_bytes("deserialization"));
+        assert!(new.contains_bytes("test"));
+        assert!(!new.contains_bytes("hello"));
+        assert!(!new.contains_bytes("world"));
+        assert_eq!(new.data, data);
     }
 
     #[test]
     fn test_partial_deserialization() {
-        let mut b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let p = Params::new(1000, 0.0001).opt(OptLevel::Best);
+        let mut b = p.try_into_v2().unwrap();
+        b.insert(&"hello").unwrap();
+        b.insert(&"world").unwrap();
         let mut data = vec![0; 256];
         data.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8);
 
@@ -1023,14 +1044,14 @@ mod test {
 
         let mut cursor = io::Cursor::new(vec![]);
         b.write(&mut cursor).unwrap();
-        println!("cursor position: {}", cursor.position());
         cursor.set_position(0);
         // deserializing the stuff out
-        let b = BloomFilter::_from_reader(cursor, true).unwrap();
-        assert_eq!(b.fpp, 0.0001);
-        assert_eq!(b.capacity, 1000);
-        assert_eq!(b.count, 2);
-        assert_eq!(b.data, data);
+        let new = BloomFilter::_from_reader(cursor, true).unwrap();
+        assert_eq!(new.fpp, 0.0001);
+        assert_eq!(new.capacity, 1000);
+        assert_eq!(new.count, 2);
+        assert_eq!(new.data, data);
+        assert_eq!(new.size_in_bytes(), b.size_in_bytes());
     }
 
     #[test]
