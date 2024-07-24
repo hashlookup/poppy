@@ -1,10 +1,15 @@
 #[derive(Debug, Clone)]
 pub struct VecBitSet(Vec<u8>);
 
+#[inline(always)]
+pub(crate) fn byte_cap_from_bit_cap(bit_cap: usize) -> usize {
+    ((bit_cap as f64) / 8.0).ceil() as usize
+}
+
 impl VecBitSet {
     /// Creates a new bitset with a given capacity
     pub fn with_bit_capacity(capacity: usize) -> Self {
-        let byte_size = ((capacity as f64) / 8.0).ceil() as usize;
+        let byte_size = byte_cap_from_bit_cap(capacity);
         Self(vec![0; byte_size])
     }
 

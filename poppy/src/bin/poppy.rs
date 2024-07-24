@@ -215,54 +215,64 @@ fn count_lines_parallel<P: AsRef<Path> + Clone>(
     Ok(count)
 }
 
+fn process_file(bf: &mut BloomFilter, input: &String, verbose: bool) -> Result<(), anyhow::Error> {
+    if verbose {
+        eprintln!("processing file: {input}");
+    }
+    let in_file = std::fs::File::open(input)?;
+
+    for line in std::io::BufReader::new(in_file).lines() {
+        let line = line?;
+        bf.insert_bytes(&line)?;
+    }
+
+    Ok(())
+}
+
 fn parallel_insert(
     bf: BloomFilter,
     files: Vec<String>,
     jobs: usize,
     verbose: bool,
 ) -> Result<BloomFilter, anyhow::Error> {
-    let arc_bf = Arc::new(std::sync::Mutex::new(bf));
-    let mut handles = vec![];
     let jobs = optimal_jobs(jobs);
 
     let batches = files.chunks(max(files.len() / jobs, 1));
+    let mut bfs = vec![];
+    for _ in 0..(batches.len() - 1) {
+        bfs.push(bf.clone())
+    }
+    // we move bf to prevent doing an additional copy
+    bfs.push(bf);
 
+    let mut handles = vec![];
+
+    // map processing
     for batch in batches {
-        let shared = Arc::clone(&arc_bf);
         let batch: Vec<String> = batch.to_vec();
-        let mut copy = shared
-            .lock()
-            .map_err(|e| anyhow!("failed to lock mutex: {}", e))?
-            .clone();
+        let mut copy = bfs.pop().unwrap();
 
         let h = thread::spawn(move || {
             for input in batch {
-                if verbose {
-                    eprintln!("processing file: {input}");
-                }
-                let in_file = std::fs::File::open(&input)?;
-
-                for line in std::io::BufReader::new(in_file).lines() {
-                    let line = line?;
-                    copy.insert_bytes(&line)?;
-                }
+                process_file(&mut copy, &input, verbose)?;
             }
 
-            let mut shared = shared
-                .lock()
-                .map_err(|e| anyhow!("failed to lock mutex: {}", e))?;
-            shared.union_merge(&copy)?;
-
-            Ok::<(), anyhow::Error>(())
+            Ok::<_, anyhow::Error>(copy)
         });
         handles.push(h)
     }
 
-    for h in handles {
-        h.join().expect("failed to join thread")?;
-    }
+    // reduce
+    let mut bfs = handles
+        .into_iter()
+        .map(|h| h.join().expect("failed to join thread").unwrap())
+        .collect::<Vec<BloomFilter>>();
 
-    let out = arc_bf.lock().expect("failed to lock mutex").clone();
+    // code should never panic here
+    let mut out = bfs.pop().expect("bpfs must always have one item");
+    while let Some(bf) = bfs.pop() {
+        out.union_merge(&bf)?;
+    }
 
     Ok(out)
 }
@@ -542,7 +552,7 @@ fn main() -> Result<(), anyhow::Error> {
         }
         Command::Show(o) => {
             let bloom_file = File::open(&o.file)?;
-            let b = BloomFilter::from_reader(bloom_file)?;
+            let b = BloomFilter::partial_from_reader(bloom_file)?;
             println!("File: {}", o.file);
             show_bf_properties(&b);
         }

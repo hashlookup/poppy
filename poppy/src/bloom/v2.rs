@@ -1,10 +1,13 @@
 use std::{
-    io::{self, BufWriter, Read, Write},
+    io::{self, BufWriter, Read, Seek, Write},
     marker::PhantomData,
 };
 
 use crate::{
-    bitset::{array::BitSet, vec::VecBitSet},
+    bitset::{
+        array::BitSet,
+        vec::{byte_cap_from_bit_cap, VecBitSet},
+    },
     hash::{digest, wyhash::WyHasher, PoppyHash, PoppyHasher},
     read_flags,
     utils::{read_le_f64, read_le_u64},
@@ -33,11 +36,14 @@ fn xorshift_star(mut seed: u64) -> u64 {
 }
 
 impl<H: PoppyHasher, const M: u64> IndexIterator<H, M> {
-    fn new(count: u64) -> Self {
+    fn new() -> Self {
         Self {
-            count,
             ..Default::default()
         }
+    }
+
+    fn set_count(&mut self, count: u64) {
+        self.count = count;
     }
 
     #[inline(always)]
@@ -68,7 +74,7 @@ impl<H: PoppyHasher, const M: u64> IndexIterator<H, M> {
     }
 
     #[inline(always)]
-    fn init_with_hashable<D: PoppyHash>(mut self, data: D) -> Self {
+    fn init_with_hashable<D: PoppyHash + ?Sized>(mut self, data: &D) -> Self {
         self.init = true;
         self.h1 = data.hash_pop::<H>();
         self.h2 = 0;
@@ -129,6 +135,9 @@ pub struct BloomFilter {
     /// it is not used by default as it increases bloom
     /// filter size
     index_cache: VecBitSet,
+    /// these two fields are needed to store partially read filter size
+    n_buckets: u64,
+    cache_byte_size: u64,
     /// the maximum of entries the filter can contains without
     /// impacting the desired false positive probability
     pub(crate) capacity: u64,
@@ -145,15 +154,21 @@ pub struct BloomFilter {
     pub data: Vec<u8>,
 }
 
-impl From<Params> for BloomFilter {
-    fn from(p: Params) -> Self {
+impl TryFrom<Params> for BloomFilter {
+    type Error = Error;
+    fn try_from(p: Params) -> Result<Self, Error> {
         Self::make(p.capacity as u64, p.fpp, p.opt)
     }
 }
 
 impl BloomFilter {
     #[inline]
-    pub fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
+    pub fn from_reader<R: Read + Seek>(r: R) -> Result<Self, Error> {
+        Self::_from_reader(r, false)
+    }
+
+    #[inline]
+    pub(crate) fn _from_reader<R: Read + Seek>(r: R, partial: bool) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -163,31 +178,58 @@ impl BloomFilter {
             return Err(Error::InvalidVersion(flags.version));
         }
 
-        Self::from_reader_with_flags(r, flags)
+        Self::from_reader_with_flags(r, flags, partial)
     }
 
     #[inline]
-    pub(crate) fn from_reader_with_flags<R: Read>(r: R, flags: Flags) -> Result<Self, Error> {
+    pub(crate) fn from_reader_with_flags<R: Read + Seek>(
+        r: R,
+        flags: Flags,
+        partial: bool,
+    ) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
         let capacity = read_le_u64(r)?;
         let fpp = read_le_f64(r)?;
+
+        // we control fpp
+        if !(f64::MIN_POSITIVE..=1.0).contains(&fpp) {
+            return Err(Error::WrongFpp(fpp));
+        }
+
         let n_hash_buck = read_le_u64(r)?;
         let count = read_le_u64(r)?;
 
-        let cache_bit_size = read_le_u64(r)? as usize;
-        let mut index_cache = VecBitSet::with_bit_capacity(cache_bit_size);
-        r.read_exact(index_cache.as_mut_slice())?;
+        let cache_bit_size = read_le_u64(r)?;
+        let cache_byte_size = byte_cap_from_bit_cap(cache_bit_size as usize) as u64;
+        let index_cache = {
+            if partial {
+                r.seek_relative(cache_byte_size as i64)?;
+                VecBitSet::with_bit_capacity(0)
+            } else {
+                let mut ic = VecBitSet::with_bit_capacity(cache_bit_size as usize);
+                r.read_exact(ic.as_mut_slice())?;
+                ic
+            }
+        };
 
         // we read the number of buckets
         let n_buckets = read_le_u64(r)? as usize;
-        let mut buckets = vec![Bucket::new(); n_buckets];
 
-        // we read all the buckets as byte buffers
-        for bucket in buckets.iter_mut().take(n_buckets) {
-            r.read_exact(bucket.as_mut_slice())?;
-        }
+        let buckets = {
+            if partial {
+                r.seek_relative((n_buckets * core::mem::size_of::<Bucket>()) as i64)?;
+                vec![]
+            } else {
+                let mut buckets = vec![Bucket::new(); n_buckets];
+                // we read all the buckets as byte buffers
+                for bucket in buckets.iter_mut().take(n_buckets) {
+                    r.read_exact(bucket.as_mut_slice())?;
+                }
+                buckets
+            }
+        };
 
         // reading data
         let mut data = Vec::new();
@@ -196,6 +238,8 @@ impl BloomFilter {
         Ok(Self {
             flags,
             index_cache,
+            n_buckets: n_buckets as u64,
+            cache_byte_size,
             capacity,
             fpp,
             n_hash_buck,
@@ -234,7 +278,11 @@ impl BloomFilter {
         Ok(())
     }
 
-    pub(crate) fn make(capacity: u64, fpp: f64, opt: OptLevel) -> Self {
+    pub(crate) fn make(capacity: u64, fpp: f64, opt: OptLevel) -> Result<Self, Error> {
+        if !(f64::MIN_POSITIVE..=1.0).contains(&fpp) {
+            return Err(Error::WrongFpp(fpp));
+        }
+
         // the capacity per bucket given a fpp
         let bucket_cap = crate::cap_from_bit_size(Bucket::bit_size() as u64, fpp);
         let bucket_bit_size = Bucket::bit_size() as u64;
@@ -263,26 +311,35 @@ impl BloomFilter {
             }
         }
 
-        Self {
+        let index_cache = VecBitSet::with_bit_capacity(cache_bit_size as usize);
+        let cache_bit_size = index_cache.byte_len() as u64;
+
+        Ok(Self {
             flags: Flags::new(2).opt(opt),
-            index_cache: VecBitSet::with_bit_capacity(cache_bit_size as usize),
+            index_cache,
+            n_buckets: n_bucket,
+            cache_byte_size: cache_bit_size,
             buckets: vec![Bucket::new(); n_bucket as usize],
             capacity,
             fpp,
             n_hash_buck,
             count: 0,
             data: vec![],
-        }
+        })
     }
 
-    pub fn with_capacity(cap: u64, proba: f64) -> Self {
+    pub fn with_capacity(cap: u64, proba: f64) -> Result<Self, Error> {
         Self::make(cap, proba, OptLevel::None)
     }
 
-    // moving this as a structure member does not improve perfs
+    #[allow(dead_code)]
     #[inline(always)]
+    // we keep this dead code as it allow to test compatibility with old implementation
+    // moving this as a structure member does not improve perfs
     fn index_iter(&self) -> IndexIterator<WyHasher, BIT_SET_MOD> {
-        IndexIterator::<_, BIT_SET_MOD>::new(self.n_hash_buck)
+        let mut it = IndexIterator::<_, BIT_SET_MOD>::new();
+        it.set_count(self.n_hash_buck);
+        it
     }
 
     #[inline(always)]
@@ -301,9 +358,13 @@ impl BloomFilter {
     /// Function to implement hash one insert many use cases. An [IndexIterator] can
     /// be obtained from [Self::prep_index_iter] method.
     pub fn insert_iter(&mut self, it: IndexIterator<WyHasher, BIT_SET_MOD>) -> Result<bool, Error> {
+        let mut it = it;
+
         if !it.is_init() {
             return Err(Error::UninitIter);
         }
+
+        it.set_count(self.n_hash_buck);
 
         if self.capacity == 0 {
             return Err(Error::TooManyEntries);
@@ -358,13 +419,13 @@ impl BloomFilter {
     /// Insert a byte slice into the filter. This function is kept to support backward
     /// compatibility with old API.
     pub fn insert_bytes<D: AsRef<[u8]>>(&mut self, data: D) -> Result<bool, Error> {
-        self.insert(data.as_ref())
+        self.insert(&data.as_ref())
     }
 
     #[inline]
     /// Generic insert any data implementing [PoppyHash] trait
-    pub fn insert<H: PoppyHash>(&mut self, data: H) -> Result<bool, Error> {
-        self.insert_iter(self.prep_index_iter(data))
+    pub fn insert<H: PoppyHash>(&mut self, data: &H) -> Result<bool, Error> {
+        self.insert_iter(Self::build_index_iter(data))
     }
 
     #[inline]
@@ -376,11 +437,11 @@ impl BloomFilter {
     /// ```
     /// use poppy_filters::v2::BloomFilter;
     ///
-    /// let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001);
+    /// let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001).unwrap();
     ///
     /// /// we prepare the data to be inserted and/or checked
     /// /// this way, the cost of hashing the data is done only once
-    /// let prep = (0..1000).map(|d| b.prep_index_iter(d)).collect::<Vec<_>>();
+    /// let prep = (0..1000).map(|d| BloomFilter::build_index_iter(&d)).collect::<Vec<_>>();
     ///
     /// for p in prep {
     ///     b.insert_iter(p).unwrap();
@@ -388,9 +449,13 @@ impl BloomFilter {
     /// }
     /// ```
     pub fn contains_iter(&self, it: IndexIterator<WyHasher, BIT_SET_MOD>) -> Result<bool, Error> {
+        let mut it = it;
+
         if !it.is_init() {
             return Err(Error::UninitIter);
         }
+
+        it.set_count(self.n_hash_buck);
 
         if self.capacity == 0 {
             return Ok(false);
@@ -437,18 +502,20 @@ impl BloomFilter {
 
     #[inline]
     pub fn contains_bytes<S: AsRef<[u8]>>(&self, data: S) -> bool {
-        self.contains(data.as_ref())
+        self.contains(&data.as_ref())
     }
 
     #[inline]
-    pub fn contains<H: PoppyHash>(&self, data: H) -> bool {
+    pub fn contains<H: PoppyHash + ?Sized>(&self, data: &H) -> bool {
         // this cannot panic as our iterator has been inititialized
-        self.contains_iter(self.prep_index_iter(data)).unwrap()
+        self.contains_iter(Self::build_index_iter(data)).unwrap()
     }
 
     #[inline]
-    pub fn prep_index_iter<H: PoppyHash>(&self, data: H) -> IndexIterator<WyHasher, BIT_SET_MOD> {
-        self.index_iter().init_with_hashable(data)
+    pub fn build_index_iter<H: PoppyHash + ?Sized>(
+        data: &H,
+    ) -> IndexIterator<WyHasher, BIT_SET_MOD> {
+        IndexIterator::new().init_with_hashable(data)
     }
 
     /// counts all the set bits in the bloom filter
@@ -465,7 +532,7 @@ impl BloomFilter {
 
     #[inline]
     pub fn size_in_bytes(&self) -> usize {
-        self.buckets.len() * Bucket::byte_size() + self.index_cache.byte_len()
+        self.n_buckets as usize * Bucket::byte_size() + self.cache_byte_size as usize
     }
 
     #[inline(always)]
@@ -620,12 +687,12 @@ mod test {
 
     macro_rules! bloom {
         ($cap:expr, $proba:expr) => {
-            $crate::bloom::v2::BloomFilter::with_capacity($cap, $proba)
+            $crate::bloom::v2::BloomFilter::with_capacity($cap, $proba).unwrap()
         };
         ($cap:expr, $proba:expr, [$($values:literal),*]) => {
             {
                 let mut b=bloom!($cap, $proba);
-                $(b.insert($values).unwrap();)*
+                $(b.insert(&$values).unwrap();)*
                 b
             }
         };
@@ -683,40 +750,42 @@ mod test {
 
     #[test]
     fn test_bloom() {
-        let mut b = BloomFilter::with_capacity(10000, 0.001);
+        let mut b = BloomFilter::with_capacity(10000, 0.001).unwrap();
         assert!(!b._contains_bytes_old("hello"));
         b.insert_bytes("hello").unwrap();
         assert!(b._contains_bytes_old("hello"));
-        assert!(b.contains("hello"));
+        assert!(b.contains(&"hello"));
         assert!(b.contains_bytes("hello"));
         assert_eq!(b.count, 1);
-        assert!(!b.contains("unknown"));
+        assert!(!b.contains(&"unknown"));
     }
 
     #[test]
     fn test_poppy_hash_compatibility() {
-        let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001);
-        assert!(!b.contains("hello"));
-        b.insert("hello").unwrap();
-        b.insert(String::from("some string")).unwrap();
+        let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001).unwrap();
+        assert!(!b.contains(&"hello"));
+        b.insert(&"hello").unwrap();
+        b.insert(&String::from("some string")).unwrap();
         b._insert_bytes_old("some old string").unwrap();
 
         assert!(b._contains_bytes_old("hello"));
         assert!(b._contains_bytes_old("some string"));
         assert!(b._contains_bytes_old("some old string"));
 
-        assert!(b.contains("hello"));
-        assert!(b.contains("some string"));
-        assert!(b.contains("some old string"));
+        assert!(b.contains(&"hello"));
+        assert!(b.contains(&"some string"));
+        assert!(b.contains(&"some old string"));
 
-        assert!(!b.contains("unknown"));
+        assert!(!b.contains(&"unknown"));
     }
 
     #[test]
     fn test_insert_contains_by_iter() {
-        let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001);
+        let mut b: BloomFilter = BloomFilter::with_capacity(10000, 0.001).unwrap();
 
-        let prep = (0..1000).map(|d| b.prep_index_iter(d)).collect::<Vec<_>>();
+        let prep = (0..1000)
+            .map(|d| BloomFilter::build_index_iter(&d))
+            .collect::<Vec<_>>();
 
         for p in prep {
             b.insert_iter(p).unwrap();
@@ -778,7 +847,7 @@ mod test {
         let count = dataset.len() as u64;
         let fpp = 0.001;
 
-        let mut b = BloomFilter::with_capacity(count, fpp);
+        let mut b = BloomFilter::with_capacity(count, fpp).unwrap();
         //let mut b = BloomFilter::make(count, fpp, OptLevel::None);
 
         // we insert data into filter
@@ -950,18 +1019,39 @@ mod test {
 
         let mut cursor = io::Cursor::new(vec![]);
         b.write(&mut cursor).unwrap();
-        println!("cursor position: {}", cursor.position());
         cursor.set_position(0);
         // deserializing the stuff out
-        let b = BloomFilter::from_reader(cursor).unwrap();
-        assert_eq!(b.fpp, 0.0001);
-        assert!(b.contains_bytes("deserialization"));
-        assert!(b.contains_bytes("test"));
-        assert!(!b.contains_bytes("hello"));
-        assert!(!b.contains_bytes("world"));
-        assert_eq!(b.data, data);
-        // last element must be 255
-        assert_eq!(b.data.last().unwrap(), &255);
+        let new = BloomFilter::from_reader(cursor).unwrap();
+        assert_eq!(new.fpp, 0.0001);
+        assert_eq!(new.size_in_bytes(), new.size_in_bytes());
+        assert!(new.contains_bytes("deserialization"));
+        assert!(new.contains_bytes("test"));
+        assert!(!new.contains_bytes("hello"));
+        assert!(!new.contains_bytes("world"));
+        assert_eq!(new.data, data);
+    }
+
+    #[test]
+    fn test_partial_deserialization() {
+        let p = Params::new(1000, 0.0001).opt(OptLevel::Best);
+        let mut b = p.try_into_v2().unwrap();
+        b.insert(&"hello").unwrap();
+        b.insert(&"world").unwrap();
+        let mut data = vec![0; 256];
+        data.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8);
+
+        b.data = data.clone();
+
+        let mut cursor = io::Cursor::new(vec![]);
+        b.write(&mut cursor).unwrap();
+        cursor.set_position(0);
+        // deserializing the stuff out
+        let new = BloomFilter::_from_reader(cursor, true).unwrap();
+        assert_eq!(new.fpp, 0.0001);
+        assert_eq!(new.capacity, 1000);
+        assert_eq!(new.count, 2);
+        assert_eq!(new.data, data);
+        assert_eq!(new.size_in_bytes(), b.size_in_bytes());
     }
 
     #[test]
@@ -995,7 +1085,7 @@ mod test {
         let count = lines.len() as u64;
         let fpp = 0.001;
 
-        let mut b = BloomFilter::with_capacity(count, fpp);
+        let mut b = BloomFilter::with_capacity(count, fpp).unwrap();
         let mb_size = dataset_size as f64 / 1_048_576.0;
         let runs = 5;
 

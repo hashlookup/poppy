@@ -1,6 +1,6 @@
 use std::{
     hash::Hasher,
-    io::{self, BufWriter, Read, Write},
+    io::{self, BufWriter, Read, Seek, Write},
 };
 
 use crate::{
@@ -91,33 +91,40 @@ pub struct BloomFilter {
     fingerprint: Fingerprint,
 }
 
-impl From<Params> for BloomFilter {
-    fn from(p: Params) -> Self {
+impl TryFrom<Params> for BloomFilter {
+    type Error = Error;
+    fn try_from(p: Params) -> Result<Self, Error> {
         Self::with_capacity(p.capacity as u64, p.fpp)
     }
 }
 
 impl BloomFilter {
-    pub fn with_capacity(cap: u64, proba: f64) -> Self {
+    /// Creates a new [BloomFilter] with a given capacity and false positive
+    /// probability `fpp`.
+    pub fn with_capacity(cap: u64, fpp: f64) -> Result<Self, Error> {
+        if !(f64::MIN_POSITIVE..=1.0).contains(&fpp) {
+            return Err(Error::WrongFpp(fpp));
+        }
+
         // size in bits, computed from the capacity we want and the probability
-        let bit_size = utils::bit_size(cap, proba);
+        let bit_size = utils::bit_size(cap, fpp);
 
         // size in u64
         let u64_size = f64::ceil(bit_size as f64 / 64.0) as usize;
 
         let n_hash_fn = utils::k(bit_size, cap);
 
-        Self {
+        Ok(Self {
             flags: Flags::new(1),
             bitset: vec![0; u64_size],
             capacity: cap,
-            fpp: proba,
+            fpp,
             n_hash: n_hash_fn,
             bit_size,
             count: 0,
             data: vec![],
             fingerprint: Fingerprint::new(n_hash_fn, bit_size),
-        }
+        })
     }
 
     #[inline(always)]
@@ -136,7 +143,12 @@ impl BloomFilter {
     }
 
     #[inline]
-    pub fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
+    pub fn from_reader<R: Read + Seek>(r: R) -> Result<Self, Error> {
+        Self::_from_reader(r, false)
+    }
+
+    #[inline]
+    pub(crate) fn _from_reader<R: Read + Seek>(r: R, partial: bool) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -144,11 +156,15 @@ impl BloomFilter {
         if flags.version != 1 {
             return Err(Error::InvalidVersion(flags.version));
         }
-        Self::from_reader_with_flags(r, flags)
+        Self::from_reader_with_flags(r, flags, partial)
     }
 
     #[inline]
-    pub(crate) fn from_reader_with_flags<R: Read>(r: R, flags: Flags) -> Result<Self, Error> {
+    pub(crate) fn from_reader_with_flags<R: Read + Seek>(
+        r: R,
+        flags: Flags,
+        partial: bool,
+    ) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -160,12 +176,19 @@ impl BloomFilter {
 
         // initializing bitset
         let u64_size = f64::ceil((bit_size as f64) / 64.0) as u64;
-        let mut bitset = vec![0; u64_size as usize];
-
-        // reading the bloom filter
-        for i in bitset.iter_mut() {
-            *i = read_le_u64(r)?;
-        }
+        let bitset = {
+            if partial {
+                r.seek_relative((u64_size * core::mem::size_of::<u64>() as u64) as i64)?;
+                vec![]
+            } else {
+                let mut bitset = vec![0; u64_size as usize];
+                // reading the bloom filter
+                for i in bitset.iter_mut() {
+                    *i = read_le_u64(r)?;
+                }
+                bitset
+            }
+        };
 
         // reading data
         let mut data = Vec::new();
@@ -320,12 +343,14 @@ impl BloomFilter {
 
     #[inline(always)]
     pub fn size_in_u64(&self) -> usize {
-        self.bitset.len()
+        self.bit_size as usize
     }
 
     #[inline(always)]
     pub fn size_in_bytes(&self) -> usize {
-        self.bitset.len() * core::mem::size_of::<u64>()
+        // this is computed from bit_size so that we don't
+        // rely on self.bitset which might be empty if partially read
+        self.size_in_u64() * core::mem::size_of::<u64>()
     }
 
     #[inline(always)]
@@ -417,7 +442,7 @@ mod test {
 
     macro_rules! bloom {
         ($cap:expr, $proba:expr) => {
-            $crate::v1::BloomFilter::with_capacity($cap, $proba)
+            $crate::v1::BloomFilter::with_capacity($cap, $proba).unwrap()
         };
         ($cap:expr, $proba:expr, [$($values:literal),*]) => {
             {
@@ -447,7 +472,9 @@ mod test {
 
     #[test]
     fn test_serialization() {
-        let b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let mut b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let data = (0..255).collect::<Vec<u8>>();
+        b.data = data.clone();
         let mut cursor = io::Cursor::new(vec![]);
         b.write(&mut cursor).unwrap();
         cursor.set_position(0);
@@ -458,6 +485,23 @@ mod test {
         assert!(b.contains_bytes("test"));
         assert!(!b.contains_bytes("hello"));
         assert!(!b.contains_bytes("world"));
+        assert_eq!(b.data, data);
+    }
+
+    #[test]
+    fn test_partial_deserialization() {
+        let mut b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let data = (0..255).collect::<Vec<u8>>();
+        b.data = data.clone();
+        let mut cursor = io::Cursor::new(vec![]);
+        b.write(&mut cursor).unwrap();
+        cursor.set_position(0);
+        // deserializing the stuff out
+        let b = BloomFilter::_from_reader(cursor, true).unwrap();
+        assert_eq!(b.fpp, 0.0001);
+        assert_eq!(b.capacity, 1000);
+        assert_eq!(b.count, 2);
+        assert_eq!(b.data, data);
     }
 
     #[test]
@@ -602,7 +646,7 @@ mod test {
             .opt(crate::OptLevel::None)
             .version(1);
 
-        let mut b = p.into_v1();
+        let mut b = p.try_into_v1().unwrap();
         let mb_size = dataset_size as f64 / 1_048_576.0;
         let runs = 5;
 
