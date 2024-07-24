@@ -1,6 +1,6 @@
 use std::{
     hash::Hasher,
-    io::{self, BufWriter, Read, Write},
+    io::{self, BufWriter, Read, Seek, Write},
 };
 
 use crate::{
@@ -143,7 +143,12 @@ impl BloomFilter {
     }
 
     #[inline]
-    pub fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
+    pub fn from_reader<R: Read + Seek>(r: R) -> Result<Self, Error> {
+        Self::_from_reader(r, false)
+    }
+
+    #[inline]
+    pub(crate) fn _from_reader<R: Read + Seek>(r: R, header_only: bool) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -151,11 +156,15 @@ impl BloomFilter {
         if flags.version != 1 {
             return Err(Error::InvalidVersion(flags.version));
         }
-        Self::from_reader_with_flags(r, flags)
+        Self::from_reader_with_flags(r, flags, header_only)
     }
 
     #[inline]
-    pub(crate) fn from_reader_with_flags<R: Read>(r: R, flags: Flags) -> Result<Self, Error> {
+    pub(crate) fn from_reader_with_flags<R: Read + Seek>(
+        r: R,
+        flags: Flags,
+        header_only: bool,
+    ) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -167,12 +176,19 @@ impl BloomFilter {
 
         // initializing bitset
         let u64_size = f64::ceil((bit_size as f64) / 64.0) as u64;
-        let mut bitset = vec![0; u64_size as usize];
-
-        // reading the bloom filter
-        for i in bitset.iter_mut() {
-            *i = read_le_u64(r)?;
-        }
+        let bitset = {
+            if header_only {
+                r.seek_relative((u64_size * core::mem::size_of::<u64>() as u64) as i64)?;
+                vec![]
+            } else {
+                let mut bitset = vec![0; u64_size as usize];
+                // reading the bloom filter
+                for i in bitset.iter_mut() {
+                    *i = read_le_u64(r)?;
+                }
+                bitset
+            }
+        };
 
         // reading data
         let mut data = Vec::new();
@@ -454,7 +470,9 @@ mod test {
 
     #[test]
     fn test_serialization() {
-        let b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let mut b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let data = (0..255).collect::<Vec<u8>>();
+        b.data = data.clone();
         let mut cursor = io::Cursor::new(vec![]);
         b.write(&mut cursor).unwrap();
         cursor.set_position(0);
@@ -465,6 +483,23 @@ mod test {
         assert!(b.contains_bytes("test"));
         assert!(!b.contains_bytes("hello"));
         assert!(!b.contains_bytes("world"));
+        assert_eq!(b.data, data);
+    }
+
+    #[test]
+    fn test_partial_deserialization() {
+        let mut b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let data = (0..255).collect::<Vec<u8>>();
+        b.data = data.clone();
+        let mut cursor = io::Cursor::new(vec![]);
+        b.write(&mut cursor).unwrap();
+        cursor.set_position(0);
+        // deserializing the stuff out
+        let b = BloomFilter::_from_reader(cursor, true).unwrap();
+        assert_eq!(b.fpp, 0.0001);
+        assert_eq!(b.capacity, 1000);
+        assert_eq!(b.count, 2);
+        assert_eq!(b.data, data);
     }
 
     #[test]

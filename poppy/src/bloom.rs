@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, Write};
 use thiserror::Error;
 
 mod utils;
@@ -235,14 +235,39 @@ impl BloomFilter {
     /// Creates a BloomFilter from a reader. The data read is supposed
     /// to be in the appropriate format, if not the function returns an
     /// Err.
-    pub fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
+    pub fn from_reader<R: Read + Seek>(r: R) -> Result<Self, Error> {
         let mut r = io::BufReader::new(r);
 
         let flags = read_flags(&mut r)?;
 
         match flags.version {
-            1 => Ok(Self::V1(v1::BloomFilter::from_reader_with_flags(r, flags)?)),
-            2 => Ok(Self::V2(v2::BloomFilter::from_reader_with_flags(r, flags)?)),
+            1 => Ok(Self::V1(v1::BloomFilter::from_reader_with_flags(
+                r, flags, false,
+            )?)),
+            2 => Ok(Self::V2(v2::BloomFilter::from_reader_with_flags(
+                r, flags, false,
+            )?)),
+            _ => Err(Error::InvalidVersion(flags.version)),
+        }
+    }
+
+    /// Creates a **partial** BloomFilter from a reader. It means the reader
+    /// is used only to fill metadata. This method will be significantly faster
+    /// than [BloomFilter::from_reader] for use cases where only filter
+    /// metadata is used. An example use case is for instance: showing filter
+    /// information.
+    pub fn partial_from_reader<R: Read + Seek>(r: R) -> Result<Self, Error> {
+        let mut r = io::BufReader::new(r);
+
+        let flags = read_flags(&mut r)?;
+
+        match flags.version {
+            1 => Ok(Self::V1(v1::BloomFilter::from_reader_with_flags(
+                r, flags, true,
+            )?)),
+            2 => Ok(Self::V2(v2::BloomFilter::from_reader_with_flags(
+                r, flags, true,
+            )?)),
             _ => Err(Error::InvalidVersion(flags.version)),
         }
     }

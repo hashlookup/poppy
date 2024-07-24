@@ -1,5 +1,5 @@
 use std::{
-    io::{self, BufWriter, Read, Write},
+    io::{self, BufWriter, Read, Seek, Write},
     marker::PhantomData,
 };
 
@@ -157,7 +157,12 @@ impl TryFrom<Params> for BloomFilter {
 
 impl BloomFilter {
     #[inline]
-    pub fn from_reader<R: Read>(r: R) -> Result<Self, Error> {
+    pub fn from_reader<R: Read + Seek>(r: R) -> Result<Self, Error> {
+        Self::_from_reader(r, false)
+    }
+
+    #[inline]
+    pub(crate) fn _from_reader<R: Read + Seek>(r: R, header_only: bool) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -167,11 +172,15 @@ impl BloomFilter {
             return Err(Error::InvalidVersion(flags.version));
         }
 
-        Self::from_reader_with_flags(r, flags)
+        Self::from_reader_with_flags(r, flags, header_only)
     }
 
     #[inline]
-    pub(crate) fn from_reader_with_flags<R: Read>(r: R, flags: Flags) -> Result<Self, Error> {
+    pub(crate) fn from_reader_with_flags<R: Read + Seek>(
+        r: R,
+        flags: Flags,
+        header_only: bool,
+    ) -> Result<Self, Error> {
         let mut br = io::BufReader::new(r);
         let r = &mut br;
 
@@ -188,16 +197,28 @@ impl BloomFilter {
 
         let cache_bit_size = read_le_u64(r)? as usize;
         let mut index_cache = VecBitSet::with_bit_capacity(cache_bit_size);
-        r.read_exact(index_cache.as_mut_slice())?;
+        if header_only {
+            r.seek_relative(index_cache.byte_len() as i64)?;
+        } else {
+            r.read_exact(index_cache.as_mut_slice())?;
+        }
 
         // we read the number of buckets
         let n_buckets = read_le_u64(r)? as usize;
-        let mut buckets = vec![Bucket::new(); n_buckets];
 
-        // we read all the buckets as byte buffers
-        for bucket in buckets.iter_mut().take(n_buckets) {
-            r.read_exact(bucket.as_mut_slice())?;
-        }
+        let buckets = {
+            if header_only {
+                r.seek_relative((n_buckets * core::mem::size_of::<Bucket>()) as i64)?;
+                vec![]
+            } else {
+                let mut buckets = vec![Bucket::new(); n_buckets];
+                // we read all the buckets as byte buffers
+                for bucket in buckets.iter_mut().take(n_buckets) {
+                    r.read_exact(bucket.as_mut_slice())?;
+                }
+                buckets
+            }
+        };
 
         // reading data
         let mut data = Vec::new();
@@ -990,8 +1011,26 @@ mod test {
         assert!(!b.contains_bytes("hello"));
         assert!(!b.contains_bytes("world"));
         assert_eq!(b.data, data);
-        // last element must be 255
-        assert_eq!(b.data.last().unwrap(), &255);
+    }
+
+    #[test]
+    fn test_partial_deserialization() {
+        let mut b = bloom!(1000, 0.0001, ["deserialization", "test"]);
+        let mut data = vec![0; 256];
+        data.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8);
+
+        b.data = data.clone();
+
+        let mut cursor = io::Cursor::new(vec![]);
+        b.write(&mut cursor).unwrap();
+        println!("cursor position: {}", cursor.position());
+        cursor.set_position(0);
+        // deserializing the stuff out
+        let b = BloomFilter::_from_reader(cursor, true).unwrap();
+        assert_eq!(b.fpp, 0.0001);
+        assert_eq!(b.capacity, 1000);
+        assert_eq!(b.count, 2);
+        assert_eq!(b.data, data);
     }
 
     #[test]

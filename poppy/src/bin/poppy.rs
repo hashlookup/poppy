@@ -552,7 +552,7 @@ fn main() -> Result<(), anyhow::Error> {
         }
         Command::Show(o) => {
             let bloom_file = File::open(&o.file)?;
-            let b = BloomFilter::from_reader(bloom_file)?;
+            let b = BloomFilter::partial_from_reader(bloom_file)?;
             println!("File: {}", o.file);
             show_bf_properties(&b);
         }
