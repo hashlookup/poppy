@@ -235,11 +235,15 @@ fn parallel_insert(
     jobs: usize,
     verbose: bool,
 ) -> Result<BloomFilter, anyhow::Error> {
+    if files.is_empty() {
+        return Ok(bf);
+    }
+
     let jobs = optimal_jobs(jobs);
 
     let batches = files.chunks(max(files.len() / jobs, 1));
     let mut bfs = vec![];
-    for _ in 0..(batches.len() - 1) {
+    for _ in 0..(batches.len().saturating_sub(1)) {
         bfs.push(bf.clone())
     }
     // we move bf to prevent doing an additional copy
