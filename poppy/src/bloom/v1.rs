@@ -303,15 +303,15 @@ impl BloomFilter {
     /// checks if an entry is contained in the bloom filter
     #[inline(always)]
     pub fn contains_bytes<S: AsRef<[u8]>>(&self, value: S) -> bool {
-        let mut ret = false;
+        if self.bitset.is_empty() {
+            return false;
+        }
         for index in self.fingerprint.fingerprint(value) {
-            ret |= self.get_nth_bit(index);
-            // if one bit is missing we early return
-            if !ret {
+            if !self.get_nth_bit(index) {
                 return false;
             }
         }
-        ret
+        true
     }
 
     /// counts all the set bits in the bloom filter
@@ -454,6 +454,22 @@ mod test {
     }
 
     #[test]
+    fn test_fingerprint() {
+        let mut f = Fingerprint::new(7, 958505).fingerprint("bar");
+
+        // These are the expected values from TestFingerprinting in bloom_test.go
+        // expected := [7]uint64{20311, 36825, 412501, 835777, 658914, 853361, 307361}
+        assert_eq!(f.next(), Some(20311));
+        assert_eq!(f.next(), Some(36825));
+        assert_eq!(f.next(), Some(412501));
+        assert_eq!(f.next(), Some(835777));
+        assert_eq!(f.next(), Some(658914));
+        assert_eq!(f.next(), Some(853361));
+        assert_eq!(f.next(), Some(307361));
+        assert_eq!(f.next(), None);
+    }
+
+    #[test]
     fn test_bloom() {
         let mut b = bloom!(100000, 0.001);
         assert!(!b.contains_bytes("value"));
@@ -517,6 +533,8 @@ mod test {
         assert!(b.contains_bytes("hello"));
         assert!(b.contains_bytes("world"));
         assert!(!b.contains_bytes("hello world"));
+        assert!(!b.contains_bytes("this"));
+        assert!(!b.contains_bytes("that"));
     }
 
     #[test]
