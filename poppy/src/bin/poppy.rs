@@ -273,7 +273,7 @@ fn parallel_insert(
         .collect::<Vec<BloomFilter>>();
 
     // code should never panic here
-    let mut out = bfs.pop().expect("bpfs must always have one item");
+    let mut out = bfs.pop().expect("bfs must always have one item");
     while let Some(bf) = bfs.pop() {
         out.union_merge(&bf)?;
     }
