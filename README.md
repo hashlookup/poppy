@@ -25,7 +25,11 @@ to select **DCSO format** when creating a filter **from CLI**, one has to use `p
 #### Regular building
 
 ```bash
+# build a dynamically linked binary
 cargo build --release --bins
+
+# build a statically linked binary (requires a specific target)
+RUSTFLAGS="-Ctarget-feature=+crt-static" cargo build --target x86_64-unknown-linux-gnu
 ```
 
 #### Building with MUSL (static binary)
@@ -49,7 +53,15 @@ Please take a look at [Poppy Bindings](./python) for further details.
 
 ### Installation
 
-In order to install `poppy` **command line utility**, one has to run the following command: `cargo install poppy-filters`
+In order to install `poppy` **command line utility**, one has to run the following command: 
+
+```bash
+# install a dynamically linked build
+cargo install poppy-filters
+
+# install a statically linked build (require you specify the build target)
+RUSTFLAGS="-Ctarget-feature=+crt-static" cargo install --target x86_64-unknown-linux-gnu poppy-filters
+```
 
 An alternative installation is by cloning this repository and compile from source using `cargo`.
 
