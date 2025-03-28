@@ -11,7 +11,7 @@ The following example assumes you are using `virtualenvwrapper`, it is trivial t
 ```bash
 mkvirtualenv poppy
 git clone https://github.com/hashlookup/poppy
-cd poppy/poppy-py
+cd poppy/python
 # install maturin (tool shipped with PyO3)
 pip install maturin
 # installs current bindings into the current virtual env
@@ -34,7 +34,7 @@ Once this is done, the dependency can be simply installed with
 
 ```bash
 git clone https://github.com/hashlookup/poppy
-cd poppy/poppy-py
+cd poppy/python
 # installs current bindings into the current virtual env
 maturin develop --release
 ```
