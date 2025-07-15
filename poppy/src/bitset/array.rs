@@ -1,4 +1,3 @@
-use core::f32;
 
 /// Array based bitset implementation.
 /// N gives the size in Bytes of the bucket
@@ -163,24 +162,24 @@ mod tests {
     #[test]
     fn test_set_nth_bit() {
         let mut bitset: BitSet<2> = BitSet::new();
-        assert_eq!(bitset.set_nth_bit(0), false); // Bit was 0, now set to 1
-        assert_eq!(bitset.get_nth_bit(0), true);
+        assert!(!bitset.set_nth_bit(0)); // Bit was 0, now set to 1
+        assert!(bitset.get_nth_bit(0));
     }
 
     #[test]
     fn test_unset_nth_bit() {
         let mut bitset: BitSet<2> = BitSet::new();
         bitset.set_nth_bit(0); // Set bit to 1 first
-        assert_eq!(bitset.unset_nth_bit(0), true); // Bit was 1, now set to 0
-        assert_eq!(bitset.get_nth_bit(0), false);
+        assert!(bitset.unset_nth_bit(0)); // Bit was 1, now set to 0
+        assert!(!bitset.get_nth_bit(0));
     }
 
     #[test]
     fn test_get_nth_bit() {
         let mut bitset: BitSet<2> = BitSet::new();
         bitset.set_nth_bit(0);
-        assert_eq!(bitset.get_nth_bit(0), true);
-        assert_eq!(bitset.get_nth_bit(1), false);
+        assert!(bitset.get_nth_bit(0));
+        assert!(!bitset.get_nth_bit(1));
     }
 
     #[test]
@@ -223,8 +222,8 @@ mod tests {
         bitset1.set_nth_bit(0);
         bitset2.set_nth_bit(1);
         bitset1.union(&bitset2);
-        assert_eq!(bitset1.get_nth_bit(0), true);
-        assert_eq!(bitset1.get_nth_bit(1), true);
+        assert!(bitset1.get_nth_bit(0));
+        assert!(bitset1.get_nth_bit(1));
     }
 
     #[test]
@@ -235,8 +234,8 @@ mod tests {
         bitset1.set_nth_bit(1);
         bitset2.set_nth_bit(1);
         bitset1.intersection(&bitset2);
-        assert_eq!(bitset1.get_nth_bit(0), false);
-        assert_eq!(bitset1.get_nth_bit(1), true);
+        assert!(!bitset1.get_nth_bit(0));
+        assert!(bitset1.get_nth_bit(1));
     }
 
     #[test]
