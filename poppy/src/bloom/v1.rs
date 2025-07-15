@@ -650,7 +650,7 @@ mod test {
             let reader = io::BufReader::new(f);
             for line in reader.lines() {
                 let line = line.unwrap();
-                let size = line.as_bytes().len();
+                let size = line.len();
                 if lines.insert(line) {
                     dataset_size += size
                 }
@@ -678,8 +678,8 @@ mod test {
         );
 
         let bit_size = utils::bit_size(count, fp_rate);
-        eprintln!("count: {}", count);
-        eprintln!("proba: {}", fp_rate);
+        eprintln!("count: {count}");
+        eprintln!("proba: {fp_rate}");
         eprintln!(
             "bit_size:{} optimized: {} expected_proba: {}",
             ByteSize::from_bits(bit_size as usize),
@@ -693,7 +693,7 @@ mod test {
         );
 
         eprintln!("\nInsertion performance:");
-        eprintln!("\tinsert duration: {:?}", insert_dur);
+        eprintln!("\tinsert duration: {insert_dur:?}");
         eprintln!(
             "\tinsertion speed: {:.1} entries/s -> {:.1} MB/s",
             count as f64 / insert_dur.as_secs_f64(),

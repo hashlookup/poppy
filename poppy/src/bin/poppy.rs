@@ -429,7 +429,7 @@ fn main() -> Result<(), anyhow::Error> {
                 }
 
                 if !marked.contains(&h) {
-                    dataset_size += line.as_bytes().len();
+                    dataset_size += line.len();
                     marked.insert(h);
                     entries.push(line);
                 }
@@ -437,7 +437,7 @@ fn main() -> Result<(), anyhow::Error> {
 
             let b = match o.file {
                 Some(f) => {
-                    println!("Benchmarking filter: {}", f);
+                    println!("Benchmarking filter: {f}");
                     let b = BloomFilter::from_reader(File::open(&f)?)?;
                     for entry in &entries {
                         if !b.contains_bytes(entry) {
@@ -528,7 +528,7 @@ fn main() -> Result<(), anyhow::Error> {
                     "\tcondition: {}% of queried values are in filter",
                     100 - mut_prob
                 );
-                println!("\tquery duration: {:?}", query_dur);
+                println!("\tquery duration: {query_dur:?}");
                 println!(
                     "\tquery speed: {:.1} queries/s -> {:.1} MB/s",
                     qps,

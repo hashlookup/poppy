@@ -395,6 +395,7 @@ impl BloomFilter {
             if !bucket.set_nth_bit(ibit as usize) {
                 new = true
             }
+
             debug_assert!(bucket.get_nth_bit(ibit as usize));
         }
 
@@ -905,9 +906,7 @@ mod test {
         if !avg_fpp.is_nan() {
             assert!(
                 avg_fpp < (fpp * (1.0 + tol)),
-                "real fpp: {} VS expected: {}",
-                avg_fpp,
-                fpp,
+                "real fpp: {avg_fpp} VS expected: {fpp}",
             );
         }
     }
@@ -1075,7 +1074,7 @@ mod test {
             let reader = io::BufReader::new(f);
             for line in reader.lines() {
                 let line = line.unwrap();
-                let size = line.as_bytes().len();
+                let size = line.len();
                 if lines.insert(line) {
                     dataset_size += size
                 }
