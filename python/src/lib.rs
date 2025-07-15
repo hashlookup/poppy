@@ -5,7 +5,7 @@ use std::{
 };
 
 use poppy::Params;
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
+use pyo3::{exceptions::PyValueError, prelude::*};
 
 #[pyclass]
 pub struct BloomFilter(poppy::BloomFilter);
@@ -110,12 +110,11 @@ impl BloomFilter {
     }
 
     /// Dumps bloom filter into a binary form
-    pub fn dumps<'py>(&self, py: Python<'py>) -> PyResult<&'py PyBytes> {
+    pub fn dumps(&self) -> PyResult<Vec<u8>> {
         let mut cursor = io::Cursor::new(vec![]);
         self.0.write(&mut cursor).map_err(Error::from)?;
         cursor.set_position(0);
-        let b = PyBytes::new(py, cursor.bytes().flatten().collect::<Vec<u8>>().as_slice());
-        Ok(b)
+        Ok(cursor.bytes().flatten().collect::<Vec<u8>>())
     }
 
     /// Save filter into a file
@@ -153,9 +152,8 @@ impl BloomFilter {
 }
 
 /// Python bindings to Poppy bloom filter library (written in Rust)
-#[pymodule]
-#[pyo3(name = "poppy")]
-fn poppy_py(_py: Python, m: &PyModule) -> PyResult<()> {
+#[pymodule(name = "poppy")]
+fn poppy_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BloomFilter>()?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(loads, m)?)?;

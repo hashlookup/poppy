@@ -19,4 +19,4 @@ doc = false
 
 [dependencies]
 poppy = { path = "../poppy", package = "poppy-filters" }
-pyo3 = "0.20.0"
+pyo3 = "0.25.1"
