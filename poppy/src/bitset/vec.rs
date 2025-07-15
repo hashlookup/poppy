@@ -55,7 +55,11 @@ impl VecBitSet {
         // equivalent to index % 8
         let mask = (value as u8) << (index & 7);
         let old = self.0[iblock] & mask == mask;
-        self.0[iblock] |= mask;
+        if value {
+            self.0[iblock] |= mask;
+        } else {
+            self.0[iblock] &= mask;
+        }
         old
     }
 
@@ -147,5 +151,110 @@ impl VecBitSet {
     #[inline]
     pub fn count_zeros(&self) -> usize {
         self.0.iter().map(|b| b.count_zeros() as usize).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_with_bit_capacity() {
+        let capacity = 10;
+        let bitset = VecBitSet::with_bit_capacity(capacity);
+        assert_eq!(bitset.bit_len(), 16); // because of byte alignment, with capacity 10 it's 16 bits (2 bytes)
+        assert_eq!(bitset.byte_len(), 2);
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let bitset = VecBitSet::with_bit_capacity(0);
+        assert!(bitset.is_empty());
+    }
+
+    #[test]
+    fn test_set_nth_bit() {
+        let mut bitset = VecBitSet::with_bit_capacity(8);
+        assert!(!bitset.get_nth_bit(0));
+        bitset.set_nth_bit(0);
+        assert!(bitset.get_nth_bit(0));
+    }
+
+    #[test]
+    fn test_unset_nth_bit() {
+        let mut bitset = VecBitSet::with_bit_capacity(8);
+        bitset.set_nth_bit(0);
+        assert!(bitset.get_nth_bit(0));
+        bitset.unset_nth_bit(0);
+        assert!(!bitset.get_nth_bit(0));
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut bitset = VecBitSet::with_bit_capacity(8);
+        bitset.set_nth_bit(0);
+        bitset.set_nth_bit(1);
+        bitset.clear();
+        assert_eq!(bitset.count_ones(), 0);
+    }
+
+    #[test]
+    fn test_union() {
+        let mut bitset1 = VecBitSet::with_bit_capacity(8);
+        let mut bitset2 = VecBitSet::with_bit_capacity(8);
+        bitset1.set_nth_bit(0);
+        bitset2.set_nth_bit(1);
+        bitset1.union(&bitset2);
+        assert!(bitset1.get_nth_bit(0));
+        assert!(bitset1.get_nth_bit(1));
+    }
+
+    #[test]
+    fn test_intersection() {
+        let mut bitset1 = VecBitSet::with_bit_capacity(8);
+        let mut bitset2 = VecBitSet::with_bit_capacity(8);
+        bitset1.set_nth_bit(0);
+        bitset1.set_nth_bit(1);
+        bitset2.set_nth_bit(1);
+        bitset2.set_nth_bit(2);
+        bitset1.intersection(&bitset2);
+        assert!(!bitset1.get_nth_bit(0));
+        assert!(bitset1.get_nth_bit(1));
+        assert!(!bitset1.get_nth_bit(2));
+    }
+
+    #[test]
+    fn test_count_ones_in_common() {
+        let mut bitset1 = VecBitSet::with_bit_capacity(8);
+        let mut bitset2 = VecBitSet::with_bit_capacity(8);
+        bitset1.set_nth_bit(0);
+        bitset1.set_nth_bit(1);
+        bitset2.set_nth_bit(1);
+        bitset2.set_nth_bit(2);
+        assert_eq!(bitset1.count_ones_in_common(&bitset2), 1);
+    }
+
+    #[test]
+    fn test_count_ones() {
+        let mut bitset = VecBitSet::with_bit_capacity(8);
+        bitset.set_nth_bit(0);
+        bitset.set_nth_bit(1);
+        assert_eq!(bitset.count_ones(), 2);
+    }
+
+    #[test]
+    fn test_count_zeros() {
+        let mut bitset = VecBitSet::with_bit_capacity(8);
+        bitset.set_nth_bit(0);
+        bitset.set_nth_bit(1);
+        assert_eq!(bitset.count_zeros(), 6);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_out_of_bounds_access() {
+        let bitset = VecBitSet::with_bit_capacity(8);
+        // should panic but handled in the test if it does.
+        bitset.get_nth_bit(8);
     }
 }
