@@ -1,7 +1,15 @@
+use core::f32;
+
 /// Array based bitset implementation.
 /// N gives the size in Bytes of the bucket
 #[derive(Debug, Clone)]
 pub struct BitSet<const N: usize>([u8; N]);
+
+impl<const N: usize> Default for BitSet<N> {
+    fn default() -> Self {
+        Self([0u8; N])
+    }
+}
 
 impl<const N: usize> BitSet<N> {
     /// Creates a new bitset
@@ -15,7 +23,11 @@ impl<const N: usize> BitSet<N> {
         // equivalent to index % 8
         let mask = (value as u8) << (index & 7);
         let old = self.0[iblock] & mask == mask;
-        self.0[iblock] |= mask;
+        if value {
+            self.0[iblock] |= mask;
+        } else {
+            self.0[iblock] &= mask;
+        }
         old
     }
 
@@ -129,5 +141,133 @@ impl<const N: usize> BitSet<N> {
     #[inline]
     pub const fn bit_size() -> usize {
         N * 8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_bitset() {
+        let bitset: BitSet<2> = BitSet::new();
+        assert_eq!(bitset.as_slice(), &[0u8; 2]);
+    }
+
+    #[test]
+    fn test_default_bitset() {
+        let bitset: BitSet<2> = BitSet::default();
+        assert_eq!(bitset.as_slice(), &[0u8; 2]);
+    }
+
+    #[test]
+    fn test_set_nth_bit() {
+        let mut bitset: BitSet<2> = BitSet::new();
+        assert_eq!(bitset.set_nth_bit(0), false); // Bit was 0, now set to 1
+        assert_eq!(bitset.get_nth_bit(0), true);
+    }
+
+    #[test]
+    fn test_unset_nth_bit() {
+        let mut bitset: BitSet<2> = BitSet::new();
+        bitset.set_nth_bit(0); // Set bit to 1 first
+        assert_eq!(bitset.unset_nth_bit(0), true); // Bit was 1, now set to 0
+        assert_eq!(bitset.get_nth_bit(0), false);
+    }
+
+    #[test]
+    fn test_get_nth_bit() {
+        let mut bitset: BitSet<2> = BitSet::new();
+        bitset.set_nth_bit(0);
+        assert_eq!(bitset.get_nth_bit(0), true);
+        assert_eq!(bitset.get_nth_bit(1), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_set_nth_bit_out_of_bounds() {
+        let mut bitset: BitSet<2> = BitSet::new();
+        bitset.set_nth_bit(16); // Assuming N=2, so 16 bits is out of bounds
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut bitset: BitSet<2> = BitSet::new();
+        bitset.set_nth_bit(0);
+        bitset.set_nth_bit(1);
+        bitset.clear();
+        assert_eq!(bitset.as_slice(), &[0u8; 2]);
+    }
+
+    #[test]
+    fn test_count_ones() {
+        let mut bitset: BitSet<2> = BitSet::new();
+        assert_eq!(bitset.count_ones(), 0);
+        bitset.set_nth_bit(0);
+        bitset.set_nth_bit(1);
+        assert_eq!(bitset.count_ones(), 2);
+    }
+
+    #[test]
+    fn test_count_zeros() {
+        let mut bitset: BitSet<2> = BitSet::new();
+        assert_eq!(bitset.count_zeros(), 16); // 2 bytes = 16 bits, all zeros initially
+        bitset.set_nth_bit(0);
+        assert_eq!(bitset.count_zeros(), 15);
+    }
+
+    #[test]
+    fn test_union() {
+        let mut bitset1: BitSet<2> = BitSet::new();
+        let mut bitset2: BitSet<2> = BitSet::new();
+        bitset1.set_nth_bit(0);
+        bitset2.set_nth_bit(1);
+        bitset1.union(&bitset2);
+        assert_eq!(bitset1.get_nth_bit(0), true);
+        assert_eq!(bitset1.get_nth_bit(1), true);
+    }
+
+    #[test]
+    fn test_intersection() {
+        let mut bitset1: BitSet<2> = BitSet::new();
+        let mut bitset2: BitSet<2> = BitSet::new();
+        bitset1.set_nth_bit(0);
+        bitset1.set_nth_bit(1);
+        bitset2.set_nth_bit(1);
+        bitset1.intersection(&bitset2);
+        assert_eq!(bitset1.get_nth_bit(0), false);
+        assert_eq!(bitset1.get_nth_bit(1), true);
+    }
+
+    #[test]
+    fn test_count_ones_in_common() {
+        let mut bitset1: BitSet<2> = BitSet::new();
+        let mut bitset2: BitSet<2> = BitSet::new();
+        bitset1.set_nth_bit(0);
+        bitset1.set_nth_bit(1);
+        bitset2.set_nth_bit(1);
+        assert_eq!(bitset1.count_ones_in_common(&bitset2), 1);
+    }
+
+    #[test]
+    fn test_bit_len() {
+        let bitset: BitSet<2> = BitSet::new();
+        assert_eq!(bitset.bit_len(), 16); // 2 bytes = 16 bits
+    }
+
+    #[test]
+    fn test_byte_len() {
+        let bitset: BitSet<2> = BitSet::new();
+        assert_eq!(bitset.byte_len(), 2);
+    }
+
+    #[test]
+    fn test_byte_size() {
+        assert_eq!(BitSet::<2>::byte_size(), 2);
+    }
+
+    #[test]
+    fn test_bit_size() {
+        assert_eq!(BitSet::<2>::bit_size(), 16);
     }
 }
